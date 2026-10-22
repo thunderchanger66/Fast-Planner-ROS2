@@ -14,6 +14,7 @@ KinoReplanFSM::~KinoReplanFSM() {
 
 void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   current_wp_  = 0;
+  node_ = nh;
   exec_state_  = FSM_EXEC_STATE::INIT;
   have_target_ = false;
   have_odom_   = false;
@@ -22,7 +23,9 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter("fsm/thresh_replan", -1.0);
   nh->declare_parameter("fsm/thresh_no_replan", -1.0);
   nh->declare_parameter("fsm/waypoint_num", -1);
-  nh->declare_parameter("goal_topic", "/drone_0_plan_vis/goal_point");
+  // /goal_pose is the bridge/manual_goal contract.  Launch files can still
+  // override this for a visualization or multi-UAV namespace.
+  nh->declare_parameter("goal_topic", "/goal_pose");
 
   nh->get_parameter("fsm/flight_type", target_type_);
   nh->get_parameter("fsm/thresh_replan", replan_thresh_);
@@ -96,7 +99,7 @@ void KinoReplanFSM::waypointCallback(const geometry_msgs::msg::PoseStamped::Shar
   end_vel_.setZero();
   have_target_ = true;
 
-  if (exec_state_ == WAIT_TARGET)
+  if (exec_state_ == INIT || exec_state_ == WAIT_TARGET)
     changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
   else if (exec_state_ == EXEC_TRAJ)
     changeFSMExecState(REPLAN_TRAJ, "TRIG");
@@ -169,7 +172,7 @@ void KinoReplanFSM::execFSMCallback() {
       case EXEC_TRAJ: {
             /* determine if need to replan */
             LocalTrajData* info     = &planner_manager_->local_data_;
-            rclcpp::Time time_now = rclcpp::Clock().now();
+            rclcpp::Time time_now = node_->get_clock()->now();
             double         t_cur    = (time_now - info->start_time_).seconds();
             t_cur                   = min(info->duration_, t_cur);
 
@@ -197,7 +200,7 @@ void KinoReplanFSM::execFSMCallback() {
           }
     case REPLAN_TRAJ:{
       LocalTrajData* info     = &planner_manager_->local_data_;
-      rclcpp::Time time_now = rclcpp::Clock().now();
+      rclcpp::Time time_now = node_->get_clock()->now();
       double         t_cur    = (time_now - info->start_time_).seconds();
 
       start_pt_  = info->position_traj_.evaluateDeBoorT(t_cur);

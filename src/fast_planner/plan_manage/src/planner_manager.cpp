@@ -20,6 +20,7 @@ FastPlannerManager::~FastPlannerManager() {
 }
 
 void FastPlannerManager::initPlanModules(std::shared_ptr<FastPlanner> nh) {
+  clock_ = nh->get_clock();
   /* read algorithm parameters */
 
   nh->declare_parameter<double>("manager/max_vel", 0.0);
@@ -107,7 +108,7 @@ void FastPlannerManager::setGlobalWaypoints(std::vector<Eigen::Vector3d>& waypoi
 }
 
 bool FastPlannerManager::checkTrajCollision(double& distance) {
-  double t_now = (rclcpp::Clock().now() - local_data_.start_time_).seconds();
+  double t_now = (clock_->now() - local_data_.start_time_).seconds();
 
   double tm, tmp;
   local_data_.position_traj_.getTimeSpan(tm, tmp);
@@ -145,8 +146,8 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
     return false;
   }
 
-  auto t1 = rclcpp::Clock().now();
-  local_data_.start_time_ = rclcpp::Clock().now();
+  auto t1 = clock_->now();
+  local_data_.start_time_ = clock_->now();
   double t_search = 0.0, t_opt = 0.0, t_adjust = 0.0;
 
   Eigen::Vector3d init_pos = start_pt;
@@ -155,7 +156,7 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
   // kinodynamic path searching
 
-  t1 = rclcpp::Clock().now();
+  t1 = clock_->now();
 
   kino_path_finder_->reset();
 
@@ -181,7 +182,7 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
   plan_data_.kino_path_ = kino_path_finder_->getKinoTraj(0.01);
 
-  t_search = (rclcpp::Clock().now() - t1).seconds();
+  t_search = (clock_->now() - t1).seconds();
 
   // parameterize the path to bspline
 
@@ -195,7 +196,7 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
   // bspline trajectory optimization
 
-  t1 = rclcpp::Clock().now();
+  t1 = clock_->now();
 
   int cost_function = BsplineOptimizer::NORMAL_PHASE;
 
@@ -205,11 +206,11 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
   ctrl_pts = bspline_optimizers_[0]->BsplineOptimizeTraj(ctrl_pts, ts, cost_function, 1, 1);
 
-  t_opt = (rclcpp::Clock().now() - t1).seconds();
+  t_opt = (clock_->now() - t1).seconds();
 
   // iterative time adjustment
 
-  t1 = rclcpp::Clock().now();
+  t1 = clock_->now();
   NonUniformBspline pos = NonUniformBspline(ctrl_pts, 3, ts);
 
   double to = pos.getTimeSum();
@@ -231,7 +232,7 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
     std::cout << "reallocate error." << std::endl;
   }
 
-  t_adjust = (rclcpp::Clock().now() - t1).seconds();
+  t_adjust = (clock_->now() - t1).seconds();
 
   // save planned results
 
@@ -605,7 +606,7 @@ void FastPlannerManager::updateTrajInfo() {
 
 void FastPlannerManager::planYaw(const Eigen::Vector3d& start_yaw) {
   RCLCPP_INFO(rclcpp::get_logger("INFO:planner_manager"), "plan yaw");
-  auto t1 = rclcpp::Clock().now();
+  auto t1 = clock_->now();
   // calculate waypoints of heading
 
   auto&  pos      = local_data_.position_traj_;
@@ -672,7 +673,7 @@ void FastPlannerManager::planYaw(const Eigen::Vector3d& start_yaw) {
   plan_data_.dt_yaw_      = dt_yaw;
   plan_data_.dt_yaw_path_ = dt_yaw;
 
-  std::cout << "plan heading: " << (rclcpp::Clock().now() - t1).seconds() << std::endl;
+  std::cout << "plan heading: " << (clock_->now() - t1).seconds() << std::endl;
 }
 
 

@@ -1,8 +1,5 @@
-.vscode/**
-devel/**
-log/**
-install/**
-**/devel/**
-**/build/**
-**/log/**
-**/install/**
+.vscode
+install
+log
+build
+__pycache__

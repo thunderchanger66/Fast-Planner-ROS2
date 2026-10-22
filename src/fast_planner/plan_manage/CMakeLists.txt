@@ -29,12 +29,12 @@ find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(bspline REQUIRED)
-find_package(bspline_opt REQUIRED)
+find_package(fast_bspline_opt REQUIRED)
 find_package(poly_traj REQUIRED)
 find_package(fast_planner REQUIRED)
-find_package(path_searching REQUIRED)
-find_package(traj_utils REQUIRED)
-find_package(plan_env REQUIRED)
+find_package(fast_path_searching REQUIRED)
+find_package(fast_traj_utils REQUIRED)
+find_package(fast_plan_env REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
 include_directories(include
@@ -55,13 +55,13 @@ ament_target_dependencies(fast_planner_node
   std_msgs
   nav_msgs
   visualization_msgs
-  plan_env
-  path_searching
+  fast_plan_env
+  fast_path_searching
   bspline
-  bspline_opt
+  fast_bspline_opt
   poly_traj
   quadrotor_msgs
-  traj_utils
+  fast_traj_utils
   fast_planner
   builtin_interfaces
 )
@@ -81,13 +81,13 @@ ament_target_dependencies(traj_server
   std_msgs
   nav_msgs
   visualization_msgs
-  plan_env
-  path_searching
+  fast_plan_env
+  fast_path_searching
   bspline
-  bspline_opt
+  fast_bspline_opt
   poly_traj
   quadrotor_msgs
-  traj_utils
+  fast_traj_utils
   fast_planner
   builtin_interfaces
 )
@@ -111,6 +111,9 @@ install(DIRECTORY
   launch
   config
   DESTINATION share/${PROJECT_NAME}/
+)
+install(FILES rviz2_fastplanner.rviz
+  DESTINATION share/${PROJECT_NAME}
 )
 install(DIRECTORY include/
   DESTINATION include)

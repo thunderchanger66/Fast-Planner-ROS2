@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(path_searching)
+project(fast_path_searching)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -25,7 +25,7 @@ find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(plan_env REQUIRED)
+find_package(fast_plan_env REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 include_directories( 
@@ -34,18 +34,18 @@ include_directories(
     ${Eigen3_INCLUDE_DIRS} 
 )
 
-add_library(path_searching
+add_library(fast_path_searching
    src/kinodynamic_astar.cpp
    src/astar.cpp)
-target_include_directories(path_searching PUBLIC
+target_include_directories(fast_path_searching PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(path_searching 
+ament_target_dependencies(fast_path_searching 
   rclcpp
   std_msgs
-  plan_env
+  fast_plan_env
   visualization_msgs
 ) 
 
@@ -54,8 +54,8 @@ ament_target_dependencies(path_searching
 # plan_env
 # ) 
 
-install(TARGETS path_searching
-EXPORT export_path_searching
+install(TARGETS fast_path_searching
+EXPORT export_fast_path_searching
 ARCHIVE DESTINATION lib
 LIBRARY DESTINATION lib
 RUNTIME DESTINATION bin
@@ -65,6 +65,6 @@ RUNTIME DESTINATION bin
 install(DIRECTORY include/
 DESTINATION include)
 
-ament_export_targets(export_path_searching HAS_LIBRARY_TARGET)
-ament_export_dependencies(plan_env)
+ament_export_targets(export_fast_path_searching HAS_LIBRARY_TARGET)
+ament_export_dependencies(fast_plan_env)
 ament_package()

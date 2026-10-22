@@ -30,8 +30,14 @@
     sdf_map/virtual_ceil_height: 6.0
     sdf_map/show_occ_time: false
     sdf_map/show_esdf_time: false
-    sdf_map/pose_type: 1
+    sdf_map/pose_type: 2
+    sdf_map/p_hit: 0.70
+    sdf_map/p_miss: 0.35
+    sdf_map/p_min: 0.12
+    sdf_map/p_max: 0.97
+    sdf_map/p_occ: 0.80
     sdf_map/use_depth_filter: false
+    sdf_map/skip_pixel: 2
     sdf_map/min_ray_length: 0.2
     sdf_map/max_ray_length: 15.0
     manager/max_vel: 1.0

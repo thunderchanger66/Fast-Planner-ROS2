@@ -14,15 +14,16 @@
   <depend>visualization_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>bspline</depend>
-  <depend>bspline_opt</depend>
-  <depend>path_searching</depend>
-  <depend>plan_env</depend>
-  <depend>traj_utils</depend>
+  <depend>fast_bspline_opt</depend>
+  <depend>fast_path_searching</depend>
+  <depend>fast_plan_env</depend>
+  <depend>fast_traj_utils</depend>
   <depend>poly_traj</depend>
   <depend>fast_planner</depend>
   <depend>quadrotor_msgs</depend>
   <depend>builtin_interfaces</depend>
   <exec_depend>ros2launch</exec_depend>
+  <exec_depend>rviz2</exec_depend>
   
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

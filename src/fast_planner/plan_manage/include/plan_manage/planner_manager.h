@@ -49,6 +49,10 @@ public:
   EDTEnvironment::Ptr edt_environment_;
 
 private:
+  // All trajectory timestamps must use the node clock so simulated time and
+  // the trajectory server share the same time domain.
+  rclcpp::Clock::SharedPtr clock_;
+
   /* main planning algorithms & modules */
   SDFMap::Ptr sdf_map_;
 

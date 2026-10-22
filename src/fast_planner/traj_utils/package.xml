@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>traj_utils</name>
+  <name>fast_traj_utils</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="rohitpawar2406@gmail.com">rohit</maintainer>
@@ -12,7 +12,7 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend> 
   <depend>bspline</depend>
-  <depend>bspline_opt</depend>
+  <depend>fast_bspline_opt</depend>
   <depend>poly_traj</depend>
   <depend>fast_planner</depend>
 

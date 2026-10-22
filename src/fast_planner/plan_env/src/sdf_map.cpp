@@ -48,25 +48,25 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->declare_parameter<float>("sdf_map/cy", 0.5);
   node->declare_parameter<float>("sdf_map/fx", 0.5);
   node->declare_parameter<float>("sdf_map/fy", 0.5);
-  node->declare_parameter<bool>("sdf_map/use_depth_filter", "true");
+  node->declare_parameter<bool>("sdf_map/use_depth_filter", true);
   node->declare_parameter<float>("sdf_map/depth_filter_tolerance", 0.5);
   node->declare_parameter<float>("sdf_map/depth_filter_maxdist", 0.5);
   node->declare_parameter<float>("sdf_map/depth_filter_mindist", 0.5);
   node->declare_parameter<int>("sdf_map/depth_filter_margin", 1);
   node->declare_parameter<float>("sdf_map/k_depth_scaling_factor", 0.5);
-  node->declare_parameter<int>("sdf_map/skip_pixel", 0.5);
-  node->declare_parameter<float>("sdf_map/p_hit", 0.5);
-  node->declare_parameter<float>("sdf_map/p_miss", 0.5);
-  node->declare_parameter<float>("sdf_map/p_min", 0.5);
-  node->declare_parameter<float>("sdf_map/p_max", 0.5);
-  node->declare_parameter<float>("sdf_map/p_occ", 0.5);
+  node->declare_parameter<int>("sdf_map/skip_pixel", 2);
+  node->declare_parameter<float>("sdf_map/p_hit", 0.70);
+  node->declare_parameter<float>("sdf_map/p_miss", 0.35);
+  node->declare_parameter<float>("sdf_map/p_min", 0.12);
+  node->declare_parameter<float>("sdf_map/p_max", 0.97);
+  node->declare_parameter<float>("sdf_map/p_occ", 0.80);
   node->declare_parameter<float>("sdf_map/min_ray_length", 0.5);
   node->declare_parameter<float>("sdf_map/max_ray_length", 0.5);
   node->declare_parameter<float>("sdf_map/esdf_slice_height", 0.5);
   node->declare_parameter<float>("sdf_map/visualization_truncate_height", 0.5);
   node->declare_parameter<float>("sdf_map/virtual_ceil_height", 0.5);
   node->declare_parameter<bool>("sdf_map/show_occ_time", false);
-  node->declare_parameter<bool>("sdf_map/show_esdf_time", 0.5);
+  node->declare_parameter<bool>("sdf_map/show_esdf_time", false);
   node->declare_parameter<int>("sdf_map/pose_type", 0);
   node->declare_parameter<string>("sdf_map/frame_id", "lidar");
 
@@ -115,6 +115,13 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/local_bound_inflate", mp_.local_bound_inflate_, 1.0);
   node->get_parameter_or("sdf_map/local_map_margin", mp_.local_map_margin_, 1);
   node->get_parameter_or("sdf_map/ground_height", mp_.ground_height_, 1.0);
+
+  if (mp_.skip_pixel_ < 1) {
+    RCLCPP_WARN(node->get_logger(),
+                "sdf_map/skip_pixel must be >= 1; using 1 instead of %d",
+                mp_.skip_pixel_);
+    mp_.skip_pixel_ = 1;
+  }
 
   // Initialize other parameters
     mp_.local_bound_inflate_ = std::max(mp_.resolution_, mp_.local_bound_inflate_);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(plan_env)
+project(fast_plan_env)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -41,19 +41,19 @@ include_directories(
   ${OpenCV_INCLUDE_DIRS}
 )
 
-add_library(plan_env SHARED
+add_library(fast_plan_env SHARED
     src/sdf_map.cpp 
     # src/obj_predictor.cpp 
     src/edt_environment.cpp 
     src/raycast.cpp
   )
 
-target_include_directories(plan_env PUBLIC
+target_include_directories(fast_plan_env PUBLIC
 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 $<INSTALL_INTERFACE:include>)
 
 
-ament_target_dependencies(plan_env 
+ament_target_dependencies(fast_plan_env 
   rclcpp
   std_msgs
   nav_msgs
@@ -66,7 +66,7 @@ ament_target_dependencies(plan_env
   fast_planner
 )
 
-target_link_libraries(plan_env  
+target_link_libraries(fast_plan_env  
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
   ${OpenCV_LIBS}
@@ -79,7 +79,7 @@ install(
 )
 
 install(
-    TARGETS plan_env
+    TARGETS fast_plan_env
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     # RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -88,7 +88,7 @@ install(
   ) 
 
 ament_export_include_directories(include)
-ament_export_libraries(plan_env)
+ament_export_libraries(fast_plan_env)
 ament_export_dependencies(
     rclcpp
     std_msgs

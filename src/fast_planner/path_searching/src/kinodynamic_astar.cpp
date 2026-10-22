@@ -78,8 +78,8 @@ int KinodynamicAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_v, 
         // Check whether shot traj exist
         estimateHeuristic(cur_node->state, end_state, time_to_goal);
         computeShotTraj(cur_node->state, end_state, time_to_goal);
-        if (init_search)
-          RCUTILS_LOG_ERROR("error from kinodynamic_astar", "Shot in first search loop!");
+        if (init_search && !is_shot_succ_)
+          RCUTILS_LOG_DEBUG("Initial kinodynamic shot was rejected; continuing graph search.");
       }
     }
     if (reach_horizon)

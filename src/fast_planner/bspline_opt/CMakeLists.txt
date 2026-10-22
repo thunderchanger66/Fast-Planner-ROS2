@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(bspline_opt)
+project(fast_bspline_opt)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -22,7 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(plan_env REQUIRED)
+find_package(fast_plan_env REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 include_directories( 
@@ -32,32 +32,32 @@ include_directories(
     ${PCL_INCLUDE_DIRS}
 )
 
-add_library( bspline_opt 
+add_library( fast_bspline_opt 
     src/bspline_optimizer.cpp 
     )
 
-ament_target_dependencies(bspline_opt
+ament_target_dependencies(fast_bspline_opt
     rclcpp
     std_msgs
     visualization_msgs
     cv_bridge
-    plan_env
+    fast_plan_env
 )
 
-target_link_libraries(bspline_opt
+target_link_libraries(fast_bspline_opt
     Eigen3::Eigen
 ) 
 
 install(DIRECTORY include/
   DESTINATION include/)  
 
-install(TARGETS bspline_opt
+install(TARGETS fast_bspline_opt
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
-ament_export_libraries(bspline_opt)
+ament_export_libraries(fast_bspline_opt)
 ament_export_include_directories(include)
-ament_export_dependencies(plan_env Eigen3)
+ament_export_dependencies(fast_plan_env Eigen3)
 ament_package()

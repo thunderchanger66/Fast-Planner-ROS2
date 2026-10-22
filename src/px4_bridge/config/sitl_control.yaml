@@ -1,0 +1,36 @@
+px4_bridge:
+  ros__parameters:
+    use_sim_time: true
+    planner_command_topic: /drone_0_planning/pos_cmd
+    planner_frame: lidar
+    planner_odometry_topic: /fastlio2/lio_odom
+    px4_local_position_topic: /fmu/out/vehicle_local_position_v1
+    px4_vehicle_status_topic: /fmu/out/vehicle_status_v4
+    offboard_control_mode_topic: /fmu/in/offboard_control_mode
+    trajectory_setpoint_topic: /fmu/in/trajectory_setpoint
+    vehicle_command_topic: /fmu/in/vehicle_command
+    status_topic: /px4_bridge/status
+    observe_only: false
+    calibration_valid: true
+    start_offboard_on_first_command: true
+    arm_on_first_command: true
+    prestream_seconds: 1.0
+    publish_rate_hz: 20.0
+    max_command_age_sec: 0.5
+    max_abs_position_m: 10.0
+    max_velocity_mps: 5.0
+    max_acceleration_mps2: 10.0
+    max_yaw_rate_rps: 3.0
+    startup_takeoff_altitude_m: 0.5
+    startup_takeoff_tolerance_m: 0.08
+    # FAST-LIO and PX4 local position are both relative to their EKF startup
+    # positions, so the MID-360 mounting offset is not a local-frame offset.
+    # FAST-LIO and PX4 local position are aligned online at startup. The
+    # MID-360 virtual frame follows the simulated body axes; this rotation
+    # converts the planner's lidar axes to the PX4 NED axes for this SITL.
+    transform_translation: [0.0, 0.0, 0.0]
+    transform_rotation_row_major: [
+      0.0, 1.0, 0.0,
+      1.0, 0.0, 0.0,
+      0.0, 0.0, -1.0
+    ]

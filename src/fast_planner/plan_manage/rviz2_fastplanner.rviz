@@ -100,7 +100,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /map_generator/global_cloud
+        Value: /fastlio2/world_cloud
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -133,7 +133,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /pcl_render_node/cloud
+        Value: /fastlio2/body_cloud
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -173,7 +173,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /state_ukf/odom
+        Value: /fastlio2/lio_odom
       Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
@@ -210,7 +210,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: goal_odom
+      Name: PX4_position_command
       Namespaces:
         "": true
       Topic:
@@ -224,27 +224,15 @@ Visualization Manager:
       Arrow Length: 1
       Axes Length: 0.30000001192092896
       Axes Radius: 0.009999999776482582
-      Class: rviz_default_plugins/PoseArray
+      Class: rviz_default_plugins/Marker
       Color: 255; 25; 0
       Enabled: true
       Head Length: 0.07000000029802322
       Head Radius: 0.029999999329447746
-      Name: Goal_Point
+      Name: Fast_planned_path_and_goal
       Shaft Length: 0.23000000417232513
       Shaft Radius: 0.009999999776482582
       Shape: Arrow (Flat)
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /drone_0_plan_vis/goal_point
-      Value: true
-    - Class: rviz_default_plugins/Marker
-      Enabled: true
-      Name: goal_trajectory
-      Namespaces:
-        "": true
       Topic:
         Depth: 5
         Durability Policy: Volatile
