@@ -2,7 +2,7 @@
 #define FAST_PLANNER__BSPLINE_OPTIMIZER_HPP_
 
 #include "bspline_opt/bspline_optimizer.h"
-#include <nlopt.hpp>
+#include "bspline_opt/lbfgs.hpp"
 
 namespace fast_planner {
 
@@ -43,9 +43,6 @@ void BsplineOptimizer::setParam(std::shared_ptr<FastPlanner> nh) {
   nh->get_parameter("optimization/max_iteration_time2", max_iteration_time_[1]);
   nh->get_parameter("optimization/max_iteration_time3", max_iteration_time_[2]);
   nh->get_parameter("optimization/max_iteration_time4", max_iteration_time_[3]);
-
-  nh->get_parameter("optimization/algorithm1", algorithm1_);
-  nh->get_parameter("optimization/algorithm2", algorithm2_);
   nh->get_parameter("optimization/order", order_);
 }
 
@@ -126,14 +123,11 @@ void BsplineOptimizer::optimize() {
   // std::cout << "Variable Num " << variable_num_<< std::endl;
   // std::cout << "Is quadratic " << isQuadratic()<< std::endl;
 
-  /* do optimization using NLopt slover */
-  nlopt::opt opt(nlopt::algorithm(isQuadratic() ? algorithm1_ : algorithm2_), variable_num_);
-  opt.set_min_objective(BsplineOptimizer::costFunction, this);
-  opt.set_maxeval(max_iteration_num_[max_num_id_]);
-  opt.set_maxtime(max_iteration_time_[max_time_id_]);
-  opt.set_xtol_rel(1e-4);
+  if (variable_num_ <= 0) return;
 
   std::vector<double> q(variable_num_);
+  lower_bounds_.clear();
+  upper_bounds_.clear();
   for (int i = order_; i < pt_num; ++i) {
     if (!(cost_function_ & ENDPOINT) && i >= pt_num - order_) continue;
     for (int j = 0; j < dim_; j++) {
@@ -142,38 +136,30 @@ void BsplineOptimizer::optimize() {
   }
 
   if (dim_ != 1) {
-    std::vector<double> lb(variable_num_), ub(variable_num_);
-    const double   bound = 10.0;
+    lower_bounds_.resize(variable_num_);
+    upper_bounds_.resize(variable_num_);
     for (int i = 0; i < variable_num_; ++i) {
-      lb[i] = q[i] - bound;
-      ub[i] = q[i] + bound;
+      lower_bounds_[i] = q[i] - 10.0;
+      upper_bounds_[i] = q[i] + 10.0;
     }
-    opt.set_lower_bounds(lb);
-    opt.set_upper_bounds(ub);
   }
 
-  try {
-    double        final_cost;
-    RCLCPP_WARN(rclcpp::get_logger("BsplineOptimizer"), "%f", final_cost);
-    // std::cout << "Vector size: " << q.size() << std::endl;
-    // for (size_t i = 0; i < q.size(); ++i) {
-    //     std::cout << "q[" << i << "]: " << q[i] << std::endl;
-    // }
+  best_variable_.assign(q.begin(), q.end());
+  min_cost_ = std::numeric_limits<double>::infinity();
 
-    // std::cout << "Hellllllllllllllo1 ... " << std::endl;
-    // std::cout << "Hellllllllllllllo2 ... " << std::endl;
-    // std::cout << "Hellllllllllllllo 3... " << std::endl;
-    nlopt::result result = opt.optimize(q, final_cost);
-    // std::cout << "REsult...." << result << std::endl;
-    // std::cout << "Hellllllllllllllo4 ... " << std::endl;
-    // std::cout << "Hellllllllllllllo5 ... " << std::endl;
-    // std::cout << "Hellllllllllllllo 6... " << std::endl;
-    // RCLCPP_WARN(rclcpp::get_logger("BsplineOptimizer"), "%f", result);
-
-    /* retrieve the optimization result */
-  } catch (std::exception& e) {
-    RCLCPP_WARN(rclcpp::get_logger("BsplineOptimizer"), "[Optimization]: nlopt exception ANNA");
-    std::cout << e.what() << std::endl;
+  lbfgs::lbfgs_parameter_t params;
+  lbfgs::lbfgs_load_default_parameters(&params);
+  params.max_iterations = max_iteration_num_[max_num_id_];
+  params.g_epsilon = 1e-4;
+  optimization_start_ = std::chrono::steady_clock::now();
+  double final_cost = std::numeric_limits<double>::infinity();
+  const int result = lbfgs::lbfgs_optimize(
+      variable_num_, q.data(), &final_cost, BsplineOptimizer::costFunction,
+      lower_bounds_.empty() ? nullptr : BsplineOptimizer::stepBound,
+      BsplineOptimizer::progress, this, &params);
+  if (result < 0 && result != lbfgs::LBFGSERR_MAXIMUMITERATION) {
+    RCLCPP_WARN(rclcpp::get_logger("BsplineOptimizer"),
+                "L-BFGS stopped: %s", lbfgs::lbfgs_strerror(result));
   }
 
 
@@ -344,7 +330,7 @@ void BsplineOptimizer::calcGuideCost(const std::vector<Eigen::Vector3d>& q, doub
 
 void BsplineOptimizer::combineCost(const std::vector<double>& x, std::vector<double>& grad,
                                    double& f_combine) {
-  /* convert the NLopt format vector to control points. */
+  /* convert the optimizer vector to control points. */
 
   // This solver can support 1D-3D B-spline optimization, but we use Vector3d to store each control point
   // For 1D case, the second and third elements are zero, and similar for the 2D case.
@@ -432,19 +418,43 @@ void BsplineOptimizer::combineCost(const std::vector<double>& x, std::vector<dou
 
 }
 
-double BsplineOptimizer::costFunction(const std::vector<double>& x, std::vector<double>& grad,
-                                      void* func_data) {
+double BsplineOptimizer::costFunction(void* func_data, const double* x, double* grad, int n) {
   BsplineOptimizer* opt = reinterpret_cast<BsplineOptimizer*>(func_data);
-  double            cost;
-  opt->combineCost(x, grad, cost);
+  std::vector<double> variables(x, x + n);
+  std::vector<double> gradient(n, 0.0);
+  double cost = 0.0;
+  opt->combineCost(variables, gradient, cost);
+  std::copy(gradient.begin(), gradient.end(), grad);
   opt->iter_num_++;
 
   /* save the min cost result */
   if (cost < opt->min_cost_) {
     opt->min_cost_      = cost;
-    opt->best_variable_ = x;
+    opt->best_variable_.assign(x, x + n);
   }
   return cost;
+}
+
+double BsplineOptimizer::stepBound(void* func_data, const double* x,
+                                   const double* direction, int n) {
+  const auto* opt = reinterpret_cast<const BsplineOptimizer*>(func_data);
+  double max_step = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < n; ++i) {
+    if (direction[i] > 0.0) {
+      max_step = std::min(max_step, (opt->upper_bounds_[i] - x[i]) / direction[i]);
+    } else if (direction[i] < 0.0) {
+      max_step = std::min(max_step, (opt->lower_bounds_[i] - x[i]) / direction[i]);
+    }
+  }
+  return std::max(0.0, max_step);
+}
+
+int BsplineOptimizer::progress(void* func_data, const double*, const double*, double,
+                               double, double, double, int, int, int) {
+  const auto* opt = reinterpret_cast<const BsplineOptimizer*>(func_data);
+  const double elapsed = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - opt->optimization_start_).count();
+  return elapsed >= opt->max_iteration_time_[opt->max_time_id_] ? 1 : 0;
 }
 
 vector<Eigen::Vector3d> BsplineOptimizer::matrixToVectors(const Eigen::MatrixXd& ctrl_pts) {

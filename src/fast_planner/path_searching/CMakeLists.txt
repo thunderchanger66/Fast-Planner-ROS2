@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.8)
 project(path_searching)
 
 # Default to C99
@@ -8,7 +8,10 @@ endif()
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -20,34 +23,30 @@ find_package(ament_cmake REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 find_package(Eigen3 REQUIRED)
-find_package(PCL 1.7 REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(plan_env REQUIRED)
 find_package(visualization_msgs REQUIRED)
-
-find_package(cv_bridge REQUIRED)
 
 include_directories( 
     include
     include/plan_env
     ${Eigen3_INCLUDE_DIRS} 
-    ${PCL_INCLUDE_DIRS}
 )
 
-add_library(path_searching 
-   src/kinodynamic_astar.cpp 
-   src/astar.cpp
-   src/topo_prm.cpp
+add_library(path_searching
+   src/kinodynamic_astar.cpp
+   src/astar.cpp)
+target_include_directories(path_searching PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
 ament_target_dependencies(path_searching 
   rclcpp
-  rclpy
   std_msgs
   plan_env
-  cv_bridge
+  visualization_msgs
 ) 
 
 # target_link_libraries( path_searching
@@ -55,10 +54,8 @@ ament_target_dependencies(path_searching
 # plan_env
 # ) 
 
-ament_export_libraries(plan_env)
-ament_export_include_directories(include)
-
 install(TARGETS path_searching
+EXPORT export_path_searching
 ARCHIVE DESTINATION lib
 LIBRARY DESTINATION lib
 RUNTIME DESTINATION bin
@@ -66,8 +63,8 @@ RUNTIME DESTINATION bin
 
 
 install(DIRECTORY include/
-DESTINATION include/) 
+DESTINATION include)
 
-ament_export_libraries(path_searching)
-ament_export_include_directories(include)
+ament_export_targets(export_path_searching HAS_LIBRARY_TARGET)
+ament_export_dependencies(plan_env)
 ament_package()

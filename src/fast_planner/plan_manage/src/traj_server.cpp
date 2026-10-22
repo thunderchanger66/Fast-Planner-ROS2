@@ -47,7 +47,7 @@ class TrajServer : public rclcpp::Node
 
    void displayTrajWithColor(const std::vector<Eigen::Vector3d>& path, double resolution, const Eigen::Vector4d& color, int id) {
     auto mk = std::make_unique<visualization_msgs::msg::Marker>();
-    mk->header.frame_id = "world";
+    mk->header.frame_id = "lidar";
     mk->header.stamp = this->now();
     mk->type = visualization_msgs::msg::Marker::SPHERE_LIST;
     mk->action = visualization_msgs::msg::Marker::DELETE;
@@ -56,7 +56,7 @@ class TrajServer : public rclcpp::Node
     traj_pub->publish(std::move(mk));
 
     mk = std::make_unique<visualization_msgs::msg::Marker>();
-    mk->header.frame_id = "world";
+    mk->header.frame_id = "lidar";
     mk->header.stamp = this->now();
     mk->type = visualization_msgs::msg::Marker::SPHERE_LIST;
     mk->action = visualization_msgs::msg::Marker::ADD;
@@ -88,7 +88,7 @@ class TrajServer : public rclcpp::Node
   void drawCmd(const Eigen::Vector3d& pos, const Eigen::Vector3d& vec, const int& id, const Eigen::Vector4d& color) 
   {
     auto mk_state = std::make_unique<visualization_msgs::msg::Marker>();
-    mk_state->header.frame_id = "world";
+    mk_state->header.frame_id = "lidar";
     mk_state->header.stamp = this->now();
     mk_state->id = id;
     mk_state->type = visualization_msgs::msg::Marker::ARROW;
@@ -228,7 +228,7 @@ private:
       }
 
       cmd.header.stamp = time_now;
-      cmd.header.frame_id = "world";
+      cmd.header.frame_id = "lidar";
       cmd.trajectory_flag = quadrotor_msgs::msg::PositionCommand::TRAJECTORY_STATUS_READY;
       cmd.trajectory_id = traj_id_;
 

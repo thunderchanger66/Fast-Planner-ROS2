@@ -19,22 +19,17 @@ endif()
 find_package(ament_cmake REQUIRED)
 # uncomment the following section in order to fill in
 find_package(rclcpp REQUIRED)
-find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(plan_env REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(NLopt REQUIRED)
-find_package(fast_planner REQUIRED)
 
 include_directories( 
     include 
     include/plan_env   
     ${Eigen3_INCLUDE_DIRS} 
     ${PCL_INCLUDE_DIRS}
-    ${NLopt_INCLUDE_DIRS}
-    ${plan_env_INCLUDE_DIRS}
 )
 
 add_library( bspline_opt 
@@ -43,17 +38,14 @@ add_library( bspline_opt
 
 ament_target_dependencies(bspline_opt
     rclcpp
-    rclpy
     std_msgs
     visualization_msgs
     cv_bridge
     plan_env
-    fast_planner
 )
 
 target_link_libraries(bspline_opt
     Eigen3::Eigen
-    NLopt::nlopt
 ) 
 
 install(DIRECTORY include/
@@ -67,4 +59,5 @@ install(TARGETS bspline_opt
 
 ament_export_libraries(bspline_opt)
 ament_export_include_directories(include)
+ament_export_dependencies(plan_env Eigen3)
 ament_package()

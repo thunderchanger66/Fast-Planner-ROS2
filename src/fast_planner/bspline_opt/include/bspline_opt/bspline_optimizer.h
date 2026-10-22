@@ -2,6 +2,7 @@
 #define BSPLINE_OPTIMIZER_HPP_
 
 #include <Eigen/Eigen>
+#include <chrono>
 #include <vector>
 
 #include "plan_env/edt_environment.hpp"
@@ -85,10 +86,10 @@ private:
   double wnl_;                    //
   double dlmin_;                  //
                                   //
-  int    algorithm1_;             // optimization algorithms for quadratic cost
-  int    algorithm2_;             // optimization algorithms for general cost
   int    max_iteration_num_[4];   // stopping criteria that can be used
   double max_iteration_time_[4];  // stopping criteria that can be used
+  std::vector<double> lower_bounds_, upper_bounds_;
+  std::chrono::steady_clock::time_point optimization_start_;
 
   /* intermediate variables */
   /* buffer for gradient of cost function, to avoid repeated allocation and
@@ -111,7 +112,10 @@ private:
   /* cost function */
   /* calculate each part of cost function with control points q as input */
 
-  static double costFunction(const std::vector<double>& x, std::vector<double>& grad, void* func_data);
+  static double costFunction(void* func_data, const double* x, double* grad, int n);
+  static double stepBound(void* func_data, const double* x, const double* direction, int n);
+  static int progress(void* func_data, const double* x, const double* grad, double cost,
+                      double xnorm, double gnorm, double step, int n, int iteration, int line_search);
   void          combineCost(const std::vector<double>& x, std::vector<double>& grad, double& cost);
 
   // q contains all control points

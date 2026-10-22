@@ -54,7 +54,6 @@ private:
 
   unique_ptr<Astar> geo_path_finder_;
   unique_ptr<KinodynamicAstar> kino_path_finder_;
-  // unique_ptr<TopologyPRM> topo_prm_;
   vector<BsplineOptimizer::Ptr> bspline_optimizers_;
 
   void updateTrajInfo();

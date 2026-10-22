@@ -31,7 +31,6 @@ void FastPlannerManager::initPlanModules(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter<double>("manager/control_points_distance", 0.0);
   nh->declare_parameter<bool>("manager/use_geometric_path", "false");
   nh->declare_parameter<bool>("manager/use_kinodynamic_path", "false");
-  nh->declare_parameter<bool>("manager/use_topo_path", "false");
   nh->declare_parameter<bool>("manager/use_optimization", "false");
 
  // Decalred paramters from Bspilne optimser to avoid again decalration of same paramters
@@ -43,8 +42,6 @@ void FastPlannerManager::initPlanModules(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter<float>("optimization/dist0", 0);
   nh->declare_parameter<float>("optimization/max_vel", 0);
   nh->declare_parameter<float>("optimization/max_acc", 0);
-  nh->declare_parameter<int>("optimization/algorithm1", 0);
-  nh->declare_parameter<int>("optimization/algorithm2", 0);
   nh->declare_parameter<int>("optimization/max_iteration_num1", 0);
   nh->declare_parameter<int>("optimization/max_iteration_num2", 0);
   nh->declare_parameter<int>("optimization/max_iteration_num3", 0);
@@ -64,10 +61,9 @@ void FastPlannerManager::initPlanModules(std::shared_ptr<FastPlanner> nh) {
   nh->get_parameter_or("manager/local_segment_length", pp_.local_traj_len_, -1.0);
   nh->get_parameter_or("manager/control_points_distance", pp_.ctrl_pt_dist, -1.0);
 
-  bool use_geometric_path, use_kinodynamic_path, use_topo_path, use_optimization, use_active_perception;
+  bool use_geometric_path, use_kinodynamic_path, use_optimization, use_active_perception;
   nh->get_parameter_or("manager/use_geometric_path", use_geometric_path, false);
   nh->get_parameter_or("manager/use_kinodynamic_path", use_kinodynamic_path, false);
-  nh->get_parameter_or("manager/use_topo_path", use_topo_path, false);
   nh->get_parameter_or("manager/use_optimization", use_optimization, false);
 
   local_data_.traj_id_ = 0;

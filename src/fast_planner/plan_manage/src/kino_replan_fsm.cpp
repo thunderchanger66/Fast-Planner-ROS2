@@ -22,6 +22,7 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter("fsm/thresh_replan", -1.0);
   nh->declare_parameter("fsm/thresh_no_replan", -1.0);
   nh->declare_parameter("fsm/waypoint_num", -1);
+  nh->declare_parameter("goal_topic", "/drone_0_plan_vis/goal_point");
 
   nh->get_parameter("fsm/flight_type", target_type_);
   nh->get_parameter("fsm/thresh_replan", replan_thresh_);
@@ -58,8 +59,10 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   exec_timer_ = nh->create_wall_timer(std::chrono::milliseconds(10), std::bind(&KinoReplanFSM::execFSMCallback, this));
   safety_timer_ = nh->create_wall_timer(std::chrono::milliseconds(50), std::bind(&KinoReplanFSM::checkCollisionCallback, this));
 
-  waypoint_sub_ = nh->create_subscription<nav_msgs::msg::Path>(
-      "/waypoint_generator/waypoints", 1, std::bind(&KinoReplanFSM::waypointCallback, this, std::placeholders::_1));
+  const auto goal_topic = nh->get_parameter("goal_topic").as_string();
+  waypoint_sub_ = nh->create_subscription<geometry_msgs::msg::PoseStamped>(
+      goal_topic, rclcpp::QoS(10),
+      std::bind(&KinoReplanFSM::waypointCallback, this, std::placeholders::_1));
   odom_sub_ = nh->create_subscription<nav_msgs::msg::Odometry>(
       "/odom_world", 1, std::bind(&KinoReplanFSM::odometryCallback, this, std::placeholders::_1));
 
@@ -68,8 +71,8 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   bspline_pub_ = nh->create_publisher<quadrotor_msgs::msg::Bspline>("/planning/bspline", 10);
 }
 
-void KinoReplanFSM::waypointCallback(const nav_msgs::msg::Path::SharedPtr msg) {
-  if (msg->poses[0].pose.position.z < -0.1) {
+void KinoReplanFSM::waypointCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+  if (msg->pose.position.z < -0.1) {
     return;
   }
 
@@ -77,7 +80,7 @@ void KinoReplanFSM::waypointCallback(const nav_msgs::msg::Path::SharedPtr msg) {
   trigger_ = true;
 
   if (target_type_ == TARGET_TYPE::MANUAL_TARGET) {
-    end_pt_ << msg->poses[0].pose.position.x, msg->poses[0].pose.position.y, 1.0;
+    end_pt_ << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
 
   } else if (target_type_ == TARGET_TYPE::PRESET_TARGET) {
     end_pt_(0) = waypoints_[current_wp_][0];
@@ -102,11 +105,11 @@ void KinoReplanFSM::waypointCallback(const nav_msgs::msg::Path::SharedPtr msg) {
 void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
   odom_pos_(0) = msg->pose.pose.position.x;
   odom_pos_(1) = msg->pose.pose.position.y;
-  odom_pos_(2) = -1;
+  odom_pos_(2) = msg->pose.pose.position.z;
 
   odom_vel_(0) = msg->twist.twist.linear.x;
   odom_vel_(1) = msg->twist.twist.linear.y;
-  odom_vel_(2) = 0;
+  odom_vel_(2) = msg->twist.twist.linear.z;
 
   odom_orient_.w() = msg->pose.pose.orientation.w;
   odom_orient_.x() = msg->pose.pose.orientation.x;

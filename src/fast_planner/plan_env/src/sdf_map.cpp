@@ -68,7 +68,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->declare_parameter<bool>("sdf_map/show_occ_time", false);
   node->declare_parameter<bool>("sdf_map/show_esdf_time", 0.5);
   node->declare_parameter<int>("sdf_map/pose_type", 0);
-  node->declare_parameter<string>("sdf_map/frame_id", "map");
+  node->declare_parameter<string>("sdf_map/frame_id", "lidar");
 
   /* get parameter */
   double x_size, y_size, z_size;
@@ -111,7 +111,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/show_esdf_time", mp_.show_esdf_time_, false);
   node->get_parameter_or("sdf_map/pose_type", mp_.pose_type_, 1);
 
-  node->get_parameter_or("sdf_map/frame_id", mp_.frame_id_, string("world"));
+  node->get_parameter_or("sdf_map/frame_id", mp_.frame_id_, string("lidar"));
   node->get_parameter_or("sdf_map/local_bound_inflate", mp_.local_bound_inflate_, 1.0);
   node->get_parameter_or("sdf_map/local_map_margin", mp_.local_map_margin_, 1);
   node->get_parameter_or("sdf_map/ground_height", mp_.ground_height_, 1.0);
@@ -892,9 +892,17 @@ void SDFMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr img
 void SDFMap::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr odom) {
     if (md_.has_first_depth_) return;
 
+    if (!odom->header.frame_id.empty() && odom->header.frame_id != mp_.frame_id_) {
+      RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 5000,
+        "Ignoring odometry frame '%s'; map frame is '%s' and no TF transform is applied",
+        odom->header.frame_id.c_str(), mp_.frame_id_.c_str());
+      return;
+    }
+
     md_.camera_pos_(0) = odom->pose.pose.position.x;
     md_.camera_pos_(1) = odom->pose.pose.position.y;
-    md_.camera_pos_(2) = -1;
+    md_.camera_pos_(2) = odom->pose.pose.position.z;
 
     md_.has_odom_ = true;
 }
@@ -905,6 +913,14 @@ void SDFMap::topic_callback(const std_msgs::msg::String::SharedPtr msg)
 }
 
 void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
+    if (!img->header.frame_id.empty() && img->header.frame_id != mp_.frame_id_) {
+      RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 5000,
+        "Ignoring point cloud frame '%s'; map frame is '%s' and no TF transform is applied",
+        img->header.frame_id.c_str(), mp_.frame_id_.c_str());
+      return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ> latest_cloud;
     pcl::fromROSMsg(*img, latest_cloud);
 
@@ -926,7 +942,8 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
     Eigen::Vector3d p3d, p3d_inf;
 
     int inf_step = ceil(mp_.obstacles_inflation_ / mp_.resolution_);
-    int inf_step_z = 1;
+    int inf_step_z = std::max(
+      1, static_cast<int>(std::ceil(mp_.obstacles_inflation_ / mp_.resolution_)));
 
     double max_x, max_y, max_z, min_x, min_y, min_z;
 
@@ -940,7 +957,7 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
 
     for (size_t i = 0; i < latest_cloud.points.size(); ++i) {
         pt = latest_cloud.points[i];
-        p3d(0) = pt.x, p3d(1) = pt.y, p3d(2) = -1.0;
+        p3d(0) = pt.x, p3d(1) = pt.y, p3d(2) = pt.z;
 
         /* point inside update range */
         Eigen::Vector3d devi = p3d - md_.camera_pos_;

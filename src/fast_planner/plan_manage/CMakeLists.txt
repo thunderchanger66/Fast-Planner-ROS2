@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.8)
 project(plan_manage)
 
 # Default to C99
@@ -8,7 +8,8 @@ endif()
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -29,13 +30,11 @@ find_package(nav_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(bspline REQUIRED)
 find_package(bspline_opt REQUIRED)
+find_package(poly_traj REQUIRED)
 find_package(fast_planner REQUIRED)
 find_package(path_searching REQUIRED)
 find_package(traj_utils REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(poly_traj REQUIRED)
 find_package(plan_env REQUIRED)
-find_package(NLopt REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
 include_directories(include
@@ -56,12 +55,11 @@ ament_target_dependencies(fast_planner_node
   std_msgs
   nav_msgs
   visualization_msgs
-  cv_bridge
-  poly_traj
   plan_env
   path_searching
   bspline
   bspline_opt
+  poly_traj
   quadrotor_msgs
   traj_utils
   fast_planner
@@ -71,7 +69,6 @@ ament_target_dependencies(fast_planner_node
 target_link_libraries(fast_planner_node
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
-  NLopt::nlopt
 )
 
  ###########################################################
@@ -84,12 +81,11 @@ ament_target_dependencies(traj_server
   std_msgs
   nav_msgs
   visualization_msgs
-  cv_bridge
-  poly_traj
   plan_env
   path_searching
   bspline
   bspline_opt
+  poly_traj
   quadrotor_msgs
   traj_utils
   fast_planner
@@ -99,7 +95,6 @@ ament_target_dependencies(traj_server
 target_link_libraries(traj_server
   ${PCL_LIBRARIES}
   ${Eigen3_LIBRARIES}
-  NLopt::nlopt
 )
 
 
@@ -114,12 +109,12 @@ install(TARGETS traj_server
 
 install(DIRECTORY
   launch
+  config
   DESTINATION share/${PROJECT_NAME}/
 )
 install(DIRECTORY include/
-  DESTINATION include)          # this line works
+  DESTINATION include)
 
 ament_export_include_directories(include)
-ament_export_libraries(plan_manage)
 ament_package()
 

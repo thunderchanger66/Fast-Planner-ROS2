@@ -14,9 +14,6 @@ PlanningVisualization::PlanningVisualization(std::shared_ptr<FastPlanner> nh) {
   traj_pub_ = node->create_publisher<visualization_msgs::msg::Marker>("/planning_vis/trajectory", 20);
   pubs_.push_back(traj_pub_);
 
-  topo_pub_ = node->create_publisher<visualization_msgs::msg::Marker>("/planning_vis/topo_path", 20);
-  pubs_.push_back(topo_pub_);
-
   predict_pub_ = node->create_publisher<visualization_msgs::msg::Marker>("/planning_vis/prediction", 20);
   pubs_.push_back(predict_pub_);
 
@@ -29,8 +26,6 @@ PlanningVisualization::PlanningVisualization(std::shared_ptr<FastPlanner> nh) {
   yaw_pub_ = node->create_publisher<visualization_msgs::msg::Marker>("/planning_vis/yaw", 20);
   pubs_.push_back(yaw_pub_);
 
-  last_topo_path1_num_ = 0;
-  last_topo_path2_num_ = 0;
   last_bspline_phase1_num_ = 0;
   last_bspline_phase2_num_ = 0;
   last_frontier_num_ = 0;
@@ -43,7 +38,7 @@ void PlanningVisualization::topic_callback(const std_msgs::msg::String::SharedPt
 void PlanningVisualization::displaySphereList(const vector<Eigen::Vector3d>& list, double resolution,
                                               const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-  mk.header.frame_id = "world";
+    mk.header.frame_id = "lidar";
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::SPHERE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;
@@ -79,7 +74,7 @@ void PlanningVisualization::displaySphereList(const vector<Eigen::Vector3d>& lis
 void PlanningVisualization::displayCubeList(const vector<Eigen::Vector3d>& list, double resolution,
                                             const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-  mk.header.frame_id = "world";
+    mk.header.frame_id = "lidar";
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::CUBE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;
@@ -117,7 +112,7 @@ void PlanningVisualization::displayLineList(const vector<Eigen::Vector3d>& list1
                                             const vector<Eigen::Vector3d>& list2, double line_width,
                                             const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-  mk.header.frame_id = "world";
+    mk.header.frame_id = "lidar";
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::LINE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;
@@ -247,6 +242,8 @@ void PlanningVisualization::drawBspline(NonUniformBspline& bspline, double size,
 //   displayLineList(edge_pt1, edge_pt2, line_width, color3, GRAPH_EDGE, 1);
 // }
 
+/* Topological path visualization was removed with the unused topology planner. */
+#if 0
 void PlanningVisualization::drawTopoPathsPhase2(vector<vector<Eigen::Vector3d>>& paths,
                                                 double                           line_width) {
   // clear drawn paths
@@ -272,7 +269,10 @@ void PlanningVisualization::drawTopoPathsPhase2(vector<vector<Eigen::Vector3d>>&
                     SELECT_PATH + i % 100, 1);
   }
 }
+#endif
 
+/* Topological path visualization is intentionally omitted. */
+#if 0
 void PlanningVisualization::drawTopoPathsPhase1(vector<vector<Eigen::Vector3d>>& paths, double size) {
   // clear drawn paths
   Eigen::Vector4d color1(1, 1, 1, 1);
@@ -296,6 +296,7 @@ void PlanningVisualization::drawTopoPathsPhase1(vector<vector<Eigen::Vector3d>>&
                     FILTERED_PATH + i % 100, 1);
   }
 }
+#endif
 
 void PlanningVisualization::drawGoal(Eigen::Vector3d goal, double resolution,
                                      const Eigen::Vector4d& color, int id) {
@@ -306,13 +307,6 @@ void PlanningVisualization::drawGoal(Eigen::Vector3d goal, double resolution,
 void PlanningVisualization::drawGeometricPath(const vector<Eigen::Vector3d>& path, double resolution,
                                               const Eigen::Vector4d& color, int id) {
   displaySphereList(path, resolution, color, PATH + id % 100);
-}
-
-void PlanningVisualization::drawPolynomialTraj(PolynomialTraj poly_traj, double resolution,
-                                               const Eigen::Vector4d& color, int id) {
-  poly_traj.init();
-  vector<Eigen::Vector3d> poly_pts = poly_traj.getTraj();
-  displaySphereList(poly_pts, resolution, color, POLY_TRAJ + id % 100);
 }
 
 // void PlanningVisualization::drawPrediction(ObjPrediction pred, double resolution,

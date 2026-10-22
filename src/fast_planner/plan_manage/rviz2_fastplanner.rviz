@@ -238,7 +238,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /waypoint_generator/waypoints_vis
+        Value: /drone_0_plan_vis/goal_point
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
@@ -255,7 +255,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: world
+    Fixed Frame: lidar
     Frame Rate: 30
   Name: root
   Tools:
