@@ -3,11 +3,13 @@
 
 #include <Eigen/Eigen>
 #include <algorithm>
+#include <chrono>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <string>
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -54,7 +56,7 @@ class KinoReplanFSM {
 
 private:
   /* ---------- flag ---------- */
-  enum FSM_EXEC_STATE { INIT, WAIT_TARGET, GEN_NEW_TRAJ, REPLAN_TRAJ, EXEC_TRAJ, REPLAN_NEW };
+  enum FSM_EXEC_STATE { INIT, WAIT_TARGET, GEN_NEW_TRAJ, REPLAN_TRAJ, EXEC_TRAJ };
   enum TARGET_TYPE { MANUAL_TARGET = 1, PRESET_TARGET = 2, REFENCE_PATH = 3 };
 
   /* planning utils */
@@ -66,9 +68,13 @@ private:
   double no_replan_thresh_, replan_thresh_;
   double waypoints_[50][3];
   int waypoint_num_;
+  double replan_retry_interval_;
+  std::string planning_frame_;
+  std::chrono::steady_clock::time_point next_plan_attempt_{
+      std::chrono::steady_clock::time_point::min()};
 
   /* planning data */
-  bool trigger_, have_target_, have_odom_;
+  bool trigger_{false}, have_target_{false}, have_odom_{false};
   FSM_EXEC_STATE exec_state_;
 
   Eigen::Vector3d odom_pos_, odom_vel_;  // odometry state

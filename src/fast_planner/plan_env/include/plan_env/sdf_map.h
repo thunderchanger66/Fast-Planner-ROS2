@@ -28,6 +28,7 @@
 
 #include <Eigen/Eigen>
 #include <Eigen/StdVector>
+#include <chrono>
 #include <cv_bridge/cv_bridge.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
@@ -79,6 +80,7 @@ struct MappingParameters {
   Eigen::Vector3d local_update_range_;
   double resolution_, resolution_inv_;
   double obstacles_inflation_;
+  double point_cloud_timeout_;
   string frame_id_;
   int pose_type_;
   string map_input_;  // 1: pose+depth; 2: odom + cloud
@@ -139,6 +141,7 @@ struct MappingData {
   bool occ_need_update_, local_updated_, esdf_need_update_;
   bool has_first_depth_;
   bool has_odom_, has_cloud_;
+  std::chrono::steady_clock::time_point last_cloud_time_{};
 
   // depth image projected point cloud
 
@@ -221,6 +224,7 @@ public:
 
   void checkDist();
   bool hasDepthObservation();
+  bool hasFreshPointCloud() const;
   bool odomValid();
   void getRegion(Eigen::Vector3d& ori, Eigen::Vector3d& size);
   double getResolution();

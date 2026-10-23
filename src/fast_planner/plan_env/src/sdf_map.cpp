@@ -25,6 +25,8 @@
 
 #include "plan_env/sdf_map.h"
 #include "rcutils/logging_macros.h"
+#include <algorithm>
+#include <cmath>
 
 #define current_img_ md_.depth_image_[image_cnt_ & 1]
 #define last_img_ md_.depth_image_[!(image_cnt_ & 1)]
@@ -41,6 +43,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->declare_parameter<float>("sdf_map/local_update_range_y", 0.5);
   node->declare_parameter<float>("sdf_map/local_update_range_z", 0.5);
   node->declare_parameter<float>("sdf_map/obstacles_inflation", 0.5);
+  node->declare_parameter<double>("sdf_map/point_cloud_timeout", 0.5);
   node->declare_parameter<float>("sdf_map/local_bound_inflate", 0.5);
   node->declare_parameter<int>("sdf_map/local_map_margin", 5);
   node->declare_parameter<float>("sdf_map/ground_height", 0.5);
@@ -81,6 +84,12 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/local_update_range_y", mp_.local_update_range_(1), -1.0);
   node->get_parameter_or("sdf_map/local_update_range_z", mp_.local_update_range_(2), -1.0);
   node->get_parameter_or("sdf_map/obstacles_inflation", mp_.obstacles_inflation_, -1.0);
+  node->get_parameter_or("sdf_map/point_cloud_timeout", mp_.point_cloud_timeout_, 0.5);
+  if (!std::isfinite(mp_.point_cloud_timeout_) || mp_.point_cloud_timeout_ <= 0.0) {
+    RCLCPP_WARN(node->get_logger(),
+                "sdf_map/point_cloud_timeout must be positive; using 0.5 s");
+    mp_.point_cloud_timeout_ = 0.5;
+  }
 
   node->get_parameter_or("sdf_map/fx", mp_.fx_, -1.0);
   node->get_parameter_or("sdf_map/fy", mp_.fy_, -1.0);
@@ -931,8 +940,6 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
     pcl::PointCloud<pcl::PointXYZ> latest_cloud;
     pcl::fromROSMsg(*img, latest_cloud);
 
-    md_.has_cloud_ = true;
-
     if (!md_.has_odom_) {
         // std::cout << "no odom!" << std::endl;
         return;
@@ -941,6 +948,14 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
     if (latest_cloud.points.size() == 0) return;
 
     if (std::isnan(md_.camera_pos_(0)) || std::isnan(md_.camera_pos_(1)) || std::isnan(md_.camera_pos_(2))) return;
+
+    const bool has_finite_point = std::any_of(
+      latest_cloud.points.begin(), latest_cloud.points.end(), [](const pcl::PointXYZ& point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+      });
+    if (!has_finite_point) return;
+    md_.has_cloud_ = true;
+    md_.last_cloud_time_ = std::chrono::steady_clock::now();
 
     this->resetBuffer(md_.camera_pos_ - mp_.local_update_range_,
                       md_.camera_pos_ + mp_.local_update_range_);
@@ -964,6 +979,7 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
 
     for (size_t i = 0; i < latest_cloud.points.size(); ++i) {
         pt = latest_cloud.points[i];
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
         p3d(0) = pt.x, p3d(1) = pt.y, p3d(2) = pt.z;
 
         /* point inside update range */
@@ -1280,6 +1296,13 @@ void SDFMap::checkDist() {
 bool SDFMap::odomValid() {return md_.has_odom_;}
 
 bool SDFMap::hasDepthObservation() {return md_.has_first_depth_;}
+
+bool SDFMap::hasFreshPointCloud() const {
+  if (!md_.has_cloud_) return false;
+  const auto age = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - md_.last_cloud_time_).count();
+  return age <= mp_.point_cloud_timeout_;
+}
 
 double SDFMap::getResolution() {return mp_.resolution_;}
 

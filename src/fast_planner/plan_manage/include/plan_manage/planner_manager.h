@@ -41,6 +41,8 @@ public:
   void setGlobalWaypoints(std::vector<Eigen::Vector3d>& waypoints);
 
   bool checkTrajCollision(double& distance);
+  bool checkTrajCollision(NonUniformBspline trajectory, double& distance,
+                          double max_check_distance = 6.0);
 
   PlanParameters pp_;
   LocalTrajData local_data_;

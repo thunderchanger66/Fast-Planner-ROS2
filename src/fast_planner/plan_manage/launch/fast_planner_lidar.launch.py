@@ -41,7 +41,10 @@ def generate_launch_description():
         executable="traj_server",
         name="fast_planner_traj_server",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "planning_frame": planning_frame,
+        }],
         remappings=[
             ("/odom_world", odom_topic),
             ("/position_cmd", output_topic),

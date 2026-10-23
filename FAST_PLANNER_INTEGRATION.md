@@ -44,5 +44,25 @@ Start the planner with:
 ros2 launch plan_manage fast_planner_lidar.launch.py
 ```
 
+Start the planner and its RViz view together with:
+
+```bash
+ros2 launch plan_manage fast_planner_lidar_rviz.launch.py
+```
+
+The RViz view includes the live world and inflated local point clouds, the
+kinodynamic path and optimized B-spline, the commanded position, and the
+measured odometry trail. `planning_frame` and `use_sim_time` are forwarded to
+both planner processes and RViz. The map rejects mismatched frames, requires
+recent point-cloud data before planning, and retries failed replans with a
+short delay so an unavailable map does not trigger a tight planning loop.
+
+FAST-LIO publishes pose and world points in `lidar`, while its odometry twist
+is expressed in `child_frame_id` (`body`). Fast-Planner rotates that velocity
+into `lidar` before using it as the kinodynamic initial state. The trajectory
+server accepts the repeated endpoint knots used by clamped B-splines and
+publishes position commands in `lidar`. Local replans start from measured
+odometry and can be triggered by tracking error as well as trajectory progress.
+
 Do not run EGO-Planner at the same time. Both planners publish flight
 commands and the bridge accepts only one active command stream.

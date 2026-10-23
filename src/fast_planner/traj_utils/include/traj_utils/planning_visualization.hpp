@@ -4,6 +4,7 @@
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <memory>
+#include <string>
 #include <vector>
 #include <rclcpp/rclcpp.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -33,6 +34,7 @@ private:
     };
 
     std::shared_ptr<FastPlanner>  node;
+    std::string frame_id_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr traj_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr predict_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr visib_pub_;

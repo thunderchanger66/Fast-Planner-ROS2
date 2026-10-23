@@ -6,6 +6,7 @@ namespace fast_planner {
 
 PlanningVisualization::PlanningVisualization(std::shared_ptr<FastPlanner> nh) {
   node = nh;
+  node->get_parameter_or("sdf_map/frame_id", frame_id_, std::string("lidar"));
   RCUTILS_LOG_INFO("INSIDE PLANNING VISUALISATION!!!");
   RCUTILS_LOG_INFO(typeid(node).name());
 
@@ -38,7 +39,7 @@ void PlanningVisualization::topic_callback(const std_msgs::msg::String::SharedPt
 void PlanningVisualization::displaySphereList(const vector<Eigen::Vector3d>& list, double resolution,
                                               const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-    mk.header.frame_id = "lidar";
+    mk.header.frame_id = frame_id_;
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::SPHERE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;
@@ -74,7 +75,7 @@ void PlanningVisualization::displaySphereList(const vector<Eigen::Vector3d>& lis
 void PlanningVisualization::displayCubeList(const vector<Eigen::Vector3d>& list, double resolution,
                                             const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-    mk.header.frame_id = "lidar";
+    mk.header.frame_id = frame_id_;
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::CUBE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;
@@ -112,7 +113,7 @@ void PlanningVisualization::displayLineList(const vector<Eigen::Vector3d>& list1
                                             const vector<Eigen::Vector3d>& list2, double line_width,
                                             const Eigen::Vector4d& color, int id, int pub_id) {
   visualization_msgs::msg::Marker mk;
-    mk.header.frame_id = "lidar";
+    mk.header.frame_id = frame_id_;
   mk.header.stamp = node->now();
   mk.type = visualization_msgs::msg::Marker::LINE_LIST;
   mk.action = visualization_msgs::msg::Marker::DELETE;

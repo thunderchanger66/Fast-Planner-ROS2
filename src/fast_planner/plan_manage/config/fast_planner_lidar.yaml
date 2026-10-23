@@ -4,6 +4,7 @@
     fsm/flight_type: 1
     fsm/thresh_replan: 1.5
     fsm/thresh_no_replan: 0.2
+    fsm/replan_retry_interval: 0.25
     fsm/waypoint_num: 1
     fsm/waypoint0_x: 0.0
     fsm/waypoint0_y: 0.0
@@ -22,6 +23,7 @@
     sdf_map/local_update_range_y: 8.0
     sdf_map/local_update_range_z: 4.0
     sdf_map/obstacles_inflation: 0.35
+    sdf_map/point_cloud_timeout: 0.5
     sdf_map/local_bound_inflate: 0.0
     sdf_map/local_map_margin: 5
     sdf_map/ground_height: -2.0
@@ -61,7 +63,7 @@
     search/time_resolution: 0.8
     search/margin: 0.35
     search/allocate_num: 100000
-    search/check_num: 5
+    search/check_num: 8
     optimization/lambda1: 10.0
     optimization/lambda2: 5.0
     optimization/lambda3: 0.00001
@@ -77,7 +79,7 @@
     optimization/max_iteration_num3: 200
     optimization/max_iteration_num4: 200
     optimization/max_iteration_time1: 0.0001
-    optimization/max_iteration_time2: 0.005
+    optimization/max_iteration_time2: 0.020
     optimization/max_iteration_time3: 0.003
     optimization/max_iteration_time4: 0.003
     optimization/order: 3

@@ -1,6 +1,7 @@
 #include "plan_manage/kino_replan_fsm.h"
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <cmath>
 
 namespace fast_planner {
 
@@ -22,6 +23,7 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter("fsm/flight_type", -1);
   nh->declare_parameter("fsm/thresh_replan", -1.0);
   nh->declare_parameter("fsm/thresh_no_replan", -1.0);
+  nh->declare_parameter("fsm/replan_retry_interval", 0.25);
   nh->declare_parameter("fsm/waypoint_num", -1);
   // /goal_pose is the bridge/manual_goal contract.  Launch files can still
   // override this for a visualization or multi-UAV namespace.
@@ -30,6 +32,12 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->get_parameter("fsm/flight_type", target_type_);
   nh->get_parameter("fsm/thresh_replan", replan_thresh_);
   nh->get_parameter("fsm/thresh_no_replan", no_replan_thresh_);
+  nh->get_parameter("fsm/replan_retry_interval", replan_retry_interval_);
+  if (!std::isfinite(replan_retry_interval_) || replan_retry_interval_ < 0.0) {
+    RCLCPP_WARN(nh->get_logger(),
+                "fsm/replan_retry_interval must be finite and nonnegative; using 0.25 s");
+    replan_retry_interval_ = 0.25;
+  }
   nh->get_parameter("fsm/waypoint_num", waypoint_num_);
 
   //waypoints_.resize(waypoint_num_);
@@ -58,6 +66,7 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   //////////////////////// DOUBTS - NEXT 3 lines
   planner_manager_.reset(new FastPlannerManager);
   planner_manager_->initPlanModules(nh);
+  nh->get_parameter_or("sdf_map/frame_id", planning_frame_, std::string("lidar"));
   visualization_.reset(new PlanningVisualization(nh));
   exec_timer_ = nh->create_wall_timer(std::chrono::milliseconds(10), std::bind(&KinoReplanFSM::execFSMCallback, this));
   safety_timer_ = nh->create_wall_timer(std::chrono::milliseconds(50), std::bind(&KinoReplanFSM::checkCollisionCallback, this));
@@ -75,6 +84,19 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
 }
 
 void KinoReplanFSM::waypointCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+  if (!msg->header.frame_id.empty() && msg->header.frame_id != planning_frame_) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Ignoring goal in frame '%s'; planner frame is '%s'",
+                msg->header.frame_id.c_str(), planning_frame_.c_str());
+    return;
+  }
+
+  const auto& goal = msg->pose.position;
+  if (!std::isfinite(goal.x) || !std::isfinite(goal.y) || !std::isfinite(goal.z)) {
+    RCLCPP_WARN(node_->get_logger(), "Ignoring goal with non-finite coordinates");
+    return;
+  }
+
   if (msg->pose.position.z < -0.1) {
     return;
   }
@@ -106,18 +128,34 @@ void KinoReplanFSM::waypointCallback(const geometry_msgs::msg::PoseStamped::Shar
 }
 
 void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-  odom_pos_(0) = msg->pose.pose.position.x;
-  odom_pos_(1) = msg->pose.pose.position.y;
-  odom_pos_(2) = msg->pose.pose.position.z;
+  if (!msg->header.frame_id.empty() && msg->header.frame_id != planning_frame_) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 5000,
+      "Ignoring odometry in frame '%s'; planner frame is '%s'",
+      msg->header.frame_id.c_str(), planning_frame_.c_str());
+    return;
+  }
 
-  odom_vel_(0) = msg->twist.twist.linear.x;
-  odom_vel_(1) = msg->twist.twist.linear.y;
-  odom_vel_(2) = msg->twist.twist.linear.z;
+  const Eigen::Vector3d position(
+      msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+  const Eigen::Vector3d child_velocity(
+      msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z);
+  Eigen::Quaterniond orientation(
+      msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
+      msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+  if (!position.allFinite() || !child_velocity.allFinite() ||
+      !std::isfinite(orientation.norm()) || orientation.norm() < 1e-6) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                         "Ignoring odometry with invalid pose, velocity, or orientation");
+    return;
+  }
 
-  odom_orient_.w() = msg->pose.pose.orientation.w;
-  odom_orient_.x() = msg->pose.pose.orientation.x;
-  odom_orient_.y() = msg->pose.pose.orientation.y;
-  odom_orient_.z() = msg->pose.pose.orientation.z;
+  orientation.normalize();
+  odom_pos_ = position;
+  odom_orient_ = orientation;
+  // FAST-LIO publishes Odometry twist in child_frame_id (body), while the
+  // planner's dynamics and position are expressed in header.frame_id (lidar).
+  odom_vel_ = odom_orient_ * child_velocity;
 
   have_odom_ = true;
 }
@@ -158,14 +196,24 @@ void KinoReplanFSM::execFSMCallback() {
       break;}
 
     case GEN_NEW_TRAJ:{
+      if (std::chrono::steady_clock::now() < next_plan_attempt_) return;
+      if ((odom_pos_ - end_pt_).norm() < no_replan_thresh_) {
+        have_target_ = false;
+        changeFSMExecState(WAIT_TARGET, "GOAL_REACHED");
+        return;
+      }
       start_pt_ = odom_pos_;
       start_vel_ = odom_vel_;
       start_acc_.setZero();
       start_yaw_(0) = atan2(odom_orient_.toRotationMatrix()(1, 0), odom_orient_.toRotationMatrix()(0, 0));
       start_yaw_(1) = start_yaw_(2) = 0.0;
       if (callKinodynamicReplan()) {
+        next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
+        next_plan_attempt_ = std::chrono::steady_clock::now() +
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(replan_retry_interval_));
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       break;}
@@ -174,50 +222,51 @@ void KinoReplanFSM::execFSMCallback() {
             LocalTrajData* info     = &planner_manager_->local_data_;
             rclcpp::Time time_now = node_->get_clock()->now();
             double         t_cur    = (time_now - info->start_time_).seconds();
-            t_cur                   = min(info->duration_, t_cur);
+            t_cur = std::clamp(t_cur, 0.0, info->duration_);
 
-            Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);
-
-            /* && (end_pt_ - pos).norm() < 0.5 */
-            if (t_cur > info->duration_ - 1e-2) {
-              std::cout << "Failing the replanning .............." << t_cur << "info.duration : "<< info->duration_ << std::endl;
+            if ((end_pt_ - odom_pos_).norm() < no_replan_thresh_) {
               have_target_ = false;
-              changeFSMExecState(WAIT_TARGET, "FSM");
+              changeFSMExecState(WAIT_TARGET, "GOAL_REACHED");
               return;
+            }
 
-            } else if ((end_pt_ - pos).norm() < no_replan_thresh_) {
-              //std::cout << "near end" << std::endl;
+            if (t_cur >= info->duration_ - 1e-2) {
+              // The planned endpoint is not proof that the aircraft reached
+              // it. Keep the goal and generate a new segment from live odometry.
+              next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
+              changeFSMExecState(GEN_NEW_TRAJ, "TRAJ_END_BEFORE_GOAL");
               return;
+            }
 
-            } else if ((info->start_pos_ - pos).norm() < replan_thresh_) {
-              // std::cout << "near start" << std::endl;
-              return;
-
-            } else {
+            const Eigen::Vector3d planned_pos = info->position_traj_.evaluateDeBoorT(t_cur);
+            const double tracking_error = (odom_pos_ - planned_pos).norm();
+            if (tracking_error >= replan_thresh_ ||
+                (info->start_pos_ - planned_pos).norm() >= replan_thresh_) {
               changeFSMExecState(REPLAN_TRAJ, "FSM");
             }
             break;
           }
     case REPLAN_TRAJ:{
-      LocalTrajData* info     = &planner_manager_->local_data_;
-      rclcpp::Time time_now = node_->get_clock()->now();
-      double         t_cur    = (time_now - info->start_time_).seconds();
-
-      start_pt_  = info->position_traj_.evaluateDeBoorT(t_cur);
-      start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-      start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
-
-      start_yaw_(0) = info->yaw_traj_.evaluateDeBoorT(t_cur)[0];
-      start_yaw_(1) = info->yawdot_traj_.evaluateDeBoorT(t_cur)[0];
-      start_yaw_(2) = info->yawdotdot_traj_.evaluateDeBoorT(t_cur)[0];
+      if (std::chrono::steady_clock::now() < next_plan_attempt_) return;
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
+      start_yaw_(0) = std::atan2(
+          odom_orient_.toRotationMatrix()(1, 0), odom_orient_.toRotationMatrix()(0, 0));
+      start_yaw_(1) = 0.0;
+      start_yaw_(2) = 0.0;
 
       std_msgs::msg::Empty replan_msg;
       replan_pub_->publish(replan_msg);
 
       bool success = callKinodynamicReplan();
       if (success) {
+        next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
+        next_plan_attempt_ = std::chrono::steady_clock::now() +
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(replan_retry_interval_));
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       break;
@@ -228,6 +277,15 @@ void KinoReplanFSM::execFSMCallback() {
 void KinoReplanFSM::checkCollisionCallback() {
   LocalTrajData* info = &planner_manager_->local_data_;
 
+  if (!planner_manager_->edt_environment_->sdf_map_->hasFreshPointCloud()) {
+    if (exec_state_ == FSM_EXEC_STATE::EXEC_TRAJ) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                           "Point cloud is stale; holding trajectory while the map recovers");
+      changeFSMExecState(REPLAN_TRAJ, "MAP_STALE");
+    }
+    return;
+  }
+
   if (have_target_) {
     auto edt_env = planner_manager_->edt_environment_;
 
@@ -236,57 +294,18 @@ void KinoReplanFSM::checkCollisionCallback() {
         edt_env->evaluateCoarseEDT(end_pt_, -1.0);
 
     if (dist <= 0.3) {
-      /* try to find a max distance goal around */
-      bool            new_goal = false;
-      const double    dr = 0.5, dtheta = 30, dz = 0.3;
-      double          new_x, new_y, new_z, max_dist = -1.0;
-      Eigen::Vector3d goal;
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Rejecting goal [%.3f, %.3f, %.3f]: obstacle clearance %.3f m is below 0.300 m",
+                   end_pt_(0), end_pt_(1), end_pt_(2), dist);
 
-      for (double r = dr; r <= 5 * dr + 1e-3; r += dr) {
-        for (double theta = -90; theta <= 270; theta += dtheta) {
-          for (double nz = 1 * dz; nz >= -1 * dz; nz -= dz) {
-
-            new_x = end_pt_(0) + r * cos(theta / 57.3);
-            new_y = end_pt_(1) + r * sin(theta / 57.3);
-            new_z = end_pt_(2) + nz;
-
-            Eigen::Vector3d new_pt(new_x, new_y, new_z);
-            dist = planner_manager_->pp_.dynamic_ ?
-                edt_env->evaluateCoarseEDT(new_pt, /* time to program start+ */ info->duration_) :
-                edt_env->evaluateCoarseEDT(new_pt, -1.0);
-
-            if (dist > max_dist) {
-              /* reset end_pt_ */
-              goal(0)  = new_x;
-              goal(1)  = new_y;
-              goal(2)  = new_z;
-              max_dist = dist;
-            }
-          }
-        }
-      }
-
-      if (max_dist > 0.3) {
-        cout << "change goal, replan." << endl;
-        end_pt_      = goal;
-        have_target_ = true;
-        end_vel_.setZero();
-
-        if (exec_state_ == EXEC_TRAJ) {
-          changeFSMExecState(REPLAN_TRAJ, "SAFETY");
-        }
-
-        visualization_->drawGoal(end_pt_, 0.3, Eigen::Vector4d(1, 0, 0, 1.0));
-      } else {
-        // have_target_ = false;
-        // cout << "Goal near collision, stop." << endl;
-        // changeFSMExecState(WAIT_TARGET, "SAFETY");
-        cout << "goal near collision, keep retry" << endl;
-        changeFSMExecState(REPLAN_TRAJ, "FSM");
-
-        std_msgs::msg::Empty emt;
-        replan_pub_->publish(emt);
-      }
+      // Stop the active command at its current point. Do not replace the
+      // requested goal with a nearby point and later report that as success.
+      std_msgs::msg::Empty stop_msg;
+      replan_pub_->publish(stop_msg);
+      have_target_ = false;
+      changeFSMExecState(WAIT_TARGET, "GOAL_IN_COLLISION");
+      visualization_->drawGoal(end_pt_, 0.3, Eigen::Vector4d(1, 0, 0, 1.0));
+      return;
     }
   }
 

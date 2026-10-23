@@ -1,4 +1,6 @@
 #include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -108,29 +110,73 @@ void FastPlannerManager::setGlobalWaypoints(std::vector<Eigen::Vector3d>& waypoi
 }
 
 bool FastPlannerManager::checkTrajCollision(double& distance) {
-  double t_now = (clock_->now() - local_data_.start_time_).seconds();
+  const double elapsed = std::clamp(
+    (clock_->now() - local_data_.start_time_).seconds(), 0.0, local_data_.duration_);
 
-  double tm, tmp;
-  local_data_.position_traj_.getTimeSpan(tm, tmp);
-  Eigen::Vector3d cur_pt = local_data_.position_traj_.evaluateDeBoor(tm + t_now);
-
-  double          radius = 0.0;
-  Eigen::Vector3d fut_pt;
-  double          fut_t = 0.02;
-
-  while (radius < 6.0 && t_now + fut_t < local_data_.duration_) {
-    fut_pt = local_data_.position_traj_.evaluateDeBoor(tm + t_now + fut_t);
-
-    double dist = edt_environment_->evaluateCoarseEDT(fut_pt, -1.0);
-    if (dist < 0.1) {
-      distance = radius;
-      return false;
-    }
-
-    radius = (fut_pt - cur_pt).norm();
-    fut_t += 0.02;
+  // Check a short, explicitly sampled suffix of the active trajectory.
+  double t0, t1;
+  local_data_.position_traj_.getTimeSpan(t0, t1);
+  const double duration = std::max(0.0, t1 - t0 - elapsed);
+  if (duration <= 0.0) {
+    distance = 0.0;
+    return true;
   }
 
+  const double dt = 0.02;
+  Eigen::Vector3d previous = local_data_.position_traj_.evaluateDeBoor(t0 + elapsed);
+  if (edt_environment_->sdf_map_->getInflateOccupancy(previous) != 0) {
+    distance = 0.0;
+    return false;
+  }
+  double traveled = 0.0;
+  for (double offset = dt; offset <= duration + 1e-9; offset += dt) {
+    const Eigen::Vector3d point = local_data_.position_traj_.evaluateDeBoor(
+      t0 + elapsed + offset);
+    traveled += (point - previous).norm();
+    if (traveled > 6.0) break;
+
+    const int occupied = edt_environment_->sdf_map_->getInflateOccupancy(point);
+    if (occupied != 0) {
+      distance = traveled;
+      return false;
+    }
+    previous = point;
+  }
+  distance = traveled;
+  return true;
+}
+
+bool FastPlannerManager::checkTrajCollision(NonUniformBspline trajectory,
+                                           double& distance,
+                                           double max_check_distance) {
+  double t0, t1;
+  trajectory.getTimeSpan(t0, t1);
+  const double duration = t1 - t0;
+  if (!std::isfinite(duration) || duration <= 0.0) {
+    distance = 0.0;
+    return false;
+  }
+
+  const double dt = 0.02;
+  Eigen::Vector3d previous = trajectory.evaluateDeBoor(t0);
+  if (edt_environment_->sdf_map_->getInflateOccupancy(previous) != 0) {
+    distance = 0.0;
+    return false;
+  }
+  double traveled = 0.0;
+  for (double time = dt; time <= duration + 1e-9; time += dt) {
+    const Eigen::Vector3d point = trajectory.evaluateDeBoor(t0 + time);
+    traveled += (point - previous).norm();
+    if (traveled > max_check_distance) break;
+
+    const int occupied = edt_environment_->sdf_map_->getInflateOccupancy(point);
+    if (occupied != 0) {
+      distance = traveled;
+      return false;
+    }
+    previous = point;
+  }
+  distance = traveled;
   return true;
 }
 
@@ -146,8 +192,13 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
     return false;
   }
 
+  if (!sdf_map_->hasFreshPointCloud()) {
+    RCLCPP_WARN_THROTTLE(rclcpp::get_logger("FastPlannerManager"), *clock_, 5000,
+                         "Waiting for a fresh point cloud before planning");
+    return false;
+  }
+
   auto t1 = clock_->now();
-  local_data_.start_time_ = clock_->now();
   double t_search = 0.0, t_opt = 0.0, t_adjust = 0.0;
 
   Eigen::Vector3d init_pos = start_pt;
@@ -234,9 +285,18 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
   t_adjust = (clock_->now() - t1).seconds();
 
+  double collision_distance = 0.0;
+  if (!checkTrajCollision(pos, collision_distance, 7.0)) {
+    RCLCPP_WARN(rclcpp::get_logger("FastPlannerManager"),
+                "Rejecting optimized trajectory: collision %.2f m from its start",
+                collision_distance);
+    return false;
+  }
+
   // save planned results
 
   local_data_.position_traj_ = pos;
+  local_data_.start_time_ = clock_->now();
 
   double t_total = t_search + t_opt + t_adjust;
   std::cout << "[kino replan]: time: " << t_total << ", search: " << t_search << ", optimize: " << t_opt

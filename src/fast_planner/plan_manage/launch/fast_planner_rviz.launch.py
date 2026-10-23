@@ -12,11 +12,17 @@ def generate_launch_description():
         get_package_share_directory("plan_manage"), "rviz2_fastplanner.rviz")
     return LaunchDescription([
         DeclareLaunchArgument("rviz_config", default_value=default_config),
+        DeclareLaunchArgument("planning_frame", default_value="lidar"),
+        DeclareLaunchArgument("use_sim_time", default_value="true"),
         Node(
             package="rviz2",
             executable="rviz2",
             name="fast_planner_rviz",
             output="screen",
-            arguments=["-d", LaunchConfiguration("rviz_config")],
+            arguments=[
+                "-d", LaunchConfiguration("rviz_config"),
+                "-f", LaunchConfiguration("planning_frame"),
+            ],
+            parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
         ),
     ])
