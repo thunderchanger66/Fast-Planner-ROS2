@@ -10,7 +10,6 @@
   <depend>rclcpp</depend>
   <depend>px4_msgs</depend>
   <depend>quadrotor_msgs</depend>
-  <depend>nav_msgs</depend>
   <depend>std_msgs</depend>
   <exec_depend>plan_manage</exec_depend>
   <exec_depend>rviz2</exec_depend>

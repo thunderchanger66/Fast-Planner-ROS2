@@ -174,8 +174,8 @@ struct PlanParameters {
 struct LocalTrajData {
   /* info of generated traj */
 
-  int traj_id_;
-  double duration_;
+  int traj_id_{0};
+  double duration_{0.0};
   rclcpp::Time start_time_;
   Eigen::Vector3d start_pos_;
   NonUniformBspline position_traj_, velocity_traj_, acceleration_traj_, yaw_traj_, yawdot_traj_,

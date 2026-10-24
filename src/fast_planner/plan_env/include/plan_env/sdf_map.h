@@ -81,6 +81,7 @@ struct MappingParameters {
   double resolution_, resolution_inv_;
   double obstacles_inflation_;
   double point_cloud_timeout_;
+  double cloud_voxel_retention_sec_;  // Keep recently observed occupied voxels between clouds.
   string frame_id_;
   int pose_type_;
   string map_input_;  // 1: pose+depth; 2: odom + cloud
@@ -120,6 +121,7 @@ struct MappingData {
   std::vector<double> occupancy_buffer_;
   std::vector<char> occupancy_buffer_neg;
   std::vector<char> occupancy_buffer_inflate_;
+  std::vector<double> cloud_hit_time_sec_;  // Steady-clock timestamp per voxel; 0 = unseen.
   std::vector<double> distance_buffer_;
   std::vector<double> distance_buffer_neg_;
   std::vector<double> distance_buffer_all_;
@@ -225,6 +227,7 @@ public:
   void checkDist();
   bool hasDepthObservation();
   bool hasFreshPointCloud() const;
+  bool hasReadyMap() const;
   bool odomValid();
   void getRegion(Eigen::Vector3d& ori, Eigen::Vector3d& size);
   double getResolution();
@@ -238,6 +241,9 @@ public:
 private:
   MappingParameters mp_;
   MappingData md_;
+  Eigen::Vector3i last_cloud_min_idx_{Eigen::Vector3i::Zero()};
+  Eigen::Vector3i last_cloud_max_idx_{Eigen::Vector3i::Zero()};
+  bool cloud_window_initialized_{false};
   template <typename F_get_val, typename F_set_val>
   void fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end, int dim);
 

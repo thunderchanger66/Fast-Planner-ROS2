@@ -3,6 +3,9 @@
     planner_node/planner: 1
     fsm/flight_type: 1
     fsm/thresh_replan: 1.5
+    fsm/tracking_error_replan: 0.4
+    fsm/tracking_error_emergency: 1.5
+    fsm/odom_timeout_sec: 0.5
     fsm/thresh_no_replan: 0.2
     fsm/replan_retry_interval: 0.25
     fsm/waypoint_num: 1
@@ -22,8 +25,9 @@
     sdf_map/local_update_range_x: 8.0
     sdf_map/local_update_range_y: 8.0
     sdf_map/local_update_range_z: 4.0
-    sdf_map/obstacles_inflation: 0.35
+    sdf_map/obstacles_inflation: 0.4
     sdf_map/point_cloud_timeout: 0.5
+    sdf_map/cloud_voxel_retention_sec: 4.0
     sdf_map/local_bound_inflate: 0.0
     sdf_map/local_map_margin: 5
     sdf_map/ground_height: -2.0
@@ -42,8 +46,8 @@
     sdf_map/skip_pixel: 2
     sdf_map/min_ray_length: 0.2
     sdf_map/max_ray_length: 15.0
-    manager/max_vel: 1.0
-    manager/max_acc: 1.5
+    manager/max_vel: 0.8
+    manager/max_acc: 1.0
     manager/max_jerk: 4.0
     manager/dynamic_environment: 0
     manager/local_segment_length: 6.0
@@ -54,8 +58,8 @@
     manager/use_optimization: true
     search/max_tau: 0.6
     search/init_max_tau: 0.8
-    search/max_vel: 1.0
-    search/max_acc: 1.5
+    search/max_vel: 0.8
+    search/max_acc: 1.0
     search/w_time: 10.0
     search/horizon: 7.0
     search/lambda_heu: 5.0
@@ -72,8 +76,8 @@
     optimization/lambda6: 0.0
     optimization/lambda7: 100.0
     optimization/dist0: 0.45
-    optimization/max_vel: 1.0
-    optimization/max_acc: 1.5
+    optimization/max_vel: 0.8
+    optimization/max_acc: 1.0
     optimization/max_iteration_num1: 2
     optimization/max_iteration_num2: 300
     optimization/max_iteration_num3: 200
@@ -83,6 +87,6 @@
     optimization/max_iteration_time3: 0.003
     optimization/max_iteration_time4: 0.003
     optimization/order: 3
-    bspline/limit_vel: 1.0
-    bspline/limit_acc: 1.5
+    bspline/limit_vel: 0.8
+    bspline/limit_acc: 1.0
     bspline/limit_ratio: 1.1

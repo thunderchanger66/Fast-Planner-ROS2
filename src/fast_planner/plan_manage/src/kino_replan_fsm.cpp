@@ -24,6 +24,9 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter("fsm/thresh_replan", -1.0);
   nh->declare_parameter("fsm/thresh_no_replan", -1.0);
   nh->declare_parameter("fsm/replan_retry_interval", 0.25);
+  nh->declare_parameter("fsm/tracking_error_replan", 0.45);
+  nh->declare_parameter("fsm/tracking_error_emergency", 0.9);
+  nh->declare_parameter("fsm/odom_timeout_sec", 0.5);
   nh->declare_parameter("fsm/waypoint_num", -1);
   // /goal_pose is the bridge/manual_goal contract.  Launch files can still
   // override this for a visualization or multi-UAV namespace.
@@ -33,6 +36,18 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->get_parameter("fsm/thresh_replan", replan_thresh_);
   nh->get_parameter("fsm/thresh_no_replan", no_replan_thresh_);
   nh->get_parameter("fsm/replan_retry_interval", replan_retry_interval_);
+  nh->get_parameter("fsm/tracking_error_replan", tracking_error_replan_);
+  nh->get_parameter("fsm/tracking_error_emergency", tracking_error_emergency_);
+  nh->get_parameter("fsm/odom_timeout_sec", odom_timeout_sec_);
+  if (!std::isfinite(odom_timeout_sec_) || odom_timeout_sec_ <= 0.0)
+    odom_timeout_sec_ = 0.5;
+  if (!std::isfinite(tracking_error_replan_) || tracking_error_replan_ <= 0.0 ||
+      !std::isfinite(tracking_error_emergency_) ||
+      tracking_error_emergency_ <= tracking_error_replan_) {
+    tracking_error_replan_ = 0.45;
+    tracking_error_emergency_ = 0.9;
+    RCLCPP_WARN(nh->get_logger(), "Invalid tracking error limits; using 0.45 / 0.9 m");
+  }
   if (!std::isfinite(replan_retry_interval_) || replan_retry_interval_ < 0.0) {
     RCLCPP_WARN(nh->get_logger(),
                 "fsm/replan_retry_interval must be finite and nonnegative; using 0.25 s");
@@ -79,6 +94,7 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
       "/odom_world", 1, std::bind(&KinoReplanFSM::odometryCallback, this, std::placeholders::_1));
 
   replan_pub_ = nh->create_publisher<std_msgs::msg::Empty>("/planning/replan", 10);
+  emergency_stop_pub_ = nh->create_publisher<std_msgs::msg::Empty>("/planning/emergency_stop", 10);
   new_pub_ = nh->create_publisher<std_msgs::msg::Empty>("/planning/new", 10);
   bspline_pub_ = nh->create_publisher<quadrotor_msgs::msg::Bspline>("/planning/bspline", 10);
 }
@@ -157,7 +173,13 @@ void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
   // planner's dynamics and position are expressed in header.frame_id (lidar).
   odom_vel_ = odom_orient_ * child_velocity;
 
+  last_odom_time_ = std::chrono::steady_clock::now();
   have_odom_ = true;
+}
+
+bool KinoReplanFSM::odometryFresh() const {
+  return have_odom_ && std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - last_odom_time_).count() <= odom_timeout_sec_;
 }
 
 void KinoReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call) {
@@ -166,6 +188,11 @@ void KinoReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos
   exec_state_ = new_state;
   // RCLCPP_INFO(this->get_logger(), "[%s]: from %s to %s", pos_call.c_str(), state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str());
   RCUTILS_LOG_INFO("[%s]: from %s to %s", pos_call.c_str(), state_str[pre_s].c_str(), state_str[static_cast<int>(new_state)].c_str());
+}
+
+void KinoReplanFSM::emergencyStop(const char* reason) {
+  RCLCPP_ERROR(node_->get_logger(), "Emergency position hold requested: %s", reason);
+  emergency_stop_pub_->publish(std_msgs::msg::Empty{});
 }
 
 void KinoReplanFSM::printFSMExecState() {
@@ -182,6 +209,15 @@ void KinoReplanFSM::execFSMCallback() {
     if (!have_odom_) RCUTILS_LOG_INFO("no odom");
     if (!trigger_) RCUTILS_LOG_INFO("wait for goal");
     fsm_num = 0;
+  }
+
+  // Never seed a plan from indefinitely old FAST-LIO odometry.
+  if (!odometryFresh()) {
+    if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ) {
+      emergencyStop("odometry timeout");
+      changeFSMExecState(GEN_NEW_TRAJ, "ODOM_STALE");
+    }
+    return;
   }
 
   switch (exec_state_) {
@@ -208,6 +244,7 @@ void KinoReplanFSM::execFSMCallback() {
       start_yaw_(0) = atan2(odom_orient_.toRotationMatrix()(1, 0), odom_orient_.toRotationMatrix()(0, 0));
       start_yaw_(1) = start_yaw_(2) = 0.0;
       if (callKinodynamicReplan()) {
+        replan_pending_ = false;
         next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
@@ -240,8 +277,12 @@ void KinoReplanFSM::execFSMCallback() {
 
             const Eigen::Vector3d planned_pos = info->position_traj_.evaluateDeBoorT(t_cur);
             const double tracking_error = (odom_pos_ - planned_pos).norm();
-            if (tracking_error >= replan_thresh_ ||
-                (info->start_pos_ - planned_pos).norm() >= replan_thresh_) {
+            if (tracking_error >= tracking_error_emergency_) {
+              emergencyStop("tracking error exceeds emergency threshold");
+              changeFSMExecState(GEN_NEW_TRAJ, "TRACKING_ERROR_STOP");
+            } else if (std::chrono::steady_clock::now() >= next_plan_attempt_ &&
+                (replan_pending_ || tracking_error >= tracking_error_replan_ ||
+                 (info->start_pos_ - planned_pos).norm() >= replan_thresh_)) {
               changeFSMExecState(REPLAN_TRAJ, "FSM");
             }
             break;
@@ -256,18 +297,30 @@ void KinoReplanFSM::execFSMCallback() {
       start_yaw_(1) = 0.0;
       start_yaw_(2) = 0.0;
 
-      std_msgs::msg::Empty replan_msg;
-      replan_pub_->publish(replan_msg);
-
+      // Keep executing the validated old trajectory during normal replans.
+      // Truncating it before search succeeds creates abrupt, unsafe setpoint jumps.
       bool success = callKinodynamicReplan();
       if (success) {
+        replan_pending_ = false;
         next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
+        replan_pending_ = true;
         next_plan_attempt_ = std::chrono::steady_clock::now() +
           std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(replan_retry_interval_));
-        changeFSMExecState(GEN_NEW_TRAJ, "FSM");
+        LocalTrajData* info = &planner_manager_->local_data_;
+        const double elapsed = (node_->get_clock()->now() - info->start_time_).seconds();
+        if (elapsed < info->duration_ - 0.1) {
+          // A failed search is not itself a flight emergency. Keep tracking
+          // the active curve while the safety timer checks it, then retry.
+          RCLCPP_WARN(node_->get_logger(),
+                      "Replan failed; continuing the active trajectory and retrying in %.2f s",
+                      replan_retry_interval_);
+          changeFSMExecState(EXEC_TRAJ, "REPLAN_RETRY");
+        } else {
+          changeFSMExecState(GEN_NEW_TRAJ, "REPLAN_RETRY_AT_SEGMENT_END");
+        }
       }
       break;
     }
@@ -277,16 +330,18 @@ void KinoReplanFSM::execFSMCallback() {
 void KinoReplanFSM::checkCollisionCallback() {
   LocalTrajData* info = &planner_manager_->local_data_;
 
+  if (!odometryFresh()) return;  // execFSMCallback handles timeouts.
   if (!planner_manager_->edt_environment_->sdf_map_->hasFreshPointCloud()) {
     if (exec_state_ == FSM_EXEC_STATE::EXEC_TRAJ) {
       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                           "Point cloud is stale; holding trajectory while the map recovers");
-      changeFSMExecState(REPLAN_TRAJ, "MAP_STALE");
+                           "Point cloud is stale; requesting position hold");
+      emergencyStop("point cloud timeout");
+      changeFSMExecState(GEN_NEW_TRAJ, "MAP_STALE");
     }
     return;
   }
 
-  if (have_target_) {
+  if (have_target_ && planner_manager_->edt_environment_->sdf_map_->hasReadyMap()) {
     auto edt_env = planner_manager_->edt_environment_;
 
     double dist = planner_manager_->pp_.dynamic_ ?
@@ -300,8 +355,7 @@ void KinoReplanFSM::checkCollisionCallback() {
 
       // Stop the active command at its current point. Do not replace the
       // requested goal with a nearby point and later report that as success.
-      std_msgs::msg::Empty stop_msg;
-      replan_pub_->publish(stop_msg);
+      emergencyStop("goal is inside obstacle clearance");
       have_target_ = false;
       changeFSMExecState(WAIT_TARGET, "GOAL_IN_COLLISION");
       visualization_->drawGoal(end_pt_, 0.3, Eigen::Vector4d(1, 0, 0, 1.0));
@@ -316,8 +370,10 @@ void KinoReplanFSM::checkCollisionCallback() {
 
     if (!safe) {
       // cout << "current traj in collision." << endl;
-      RCUTILS_LOG_WARN("current traj in collision.");
-      changeFSMExecState(REPLAN_TRAJ, "SAFETY");
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Active trajectory collides in %.2f m; holding position and replanning", dist);
+      emergencyStop("collision on active trajectory");
+      changeFSMExecState(GEN_NEW_TRAJ, "SAFETY");
     }
   }
 }

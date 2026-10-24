@@ -129,17 +129,18 @@ bool FastPlannerManager::checkTrajCollision(double& distance) {
     return false;
   }
   double traveled = 0.0;
-  for (double offset = dt; offset <= duration + 1e-9; offset += dt) {
+  const int samples = std::max(1, static_cast<int>(std::ceil(duration / dt)));
+  for (int i = 1; i <= samples; ++i) {
+    const double offset = std::min(duration, i * dt);
     const Eigen::Vector3d point = local_data_.position_traj_.evaluateDeBoor(
       t0 + elapsed + offset);
     traveled += (point - previous).norm();
-    if (traveled > 6.0) break;
-
     const int occupied = edt_environment_->sdf_map_->getInflateOccupancy(point);
     if (occupied != 0) {
       distance = traveled;
       return false;
     }
+    if (traveled > 6.0) break;
     previous = point;
   }
   distance = traveled;
@@ -164,16 +165,17 @@ bool FastPlannerManager::checkTrajCollision(NonUniformBspline trajectory,
     return false;
   }
   double traveled = 0.0;
-  for (double time = dt; time <= duration + 1e-9; time += dt) {
+  const int samples = std::max(1, static_cast<int>(std::ceil(duration / dt)));
+  for (int i = 1; i <= samples; ++i) {
+    const double time = std::min(duration, i * dt);
     const Eigen::Vector3d point = trajectory.evaluateDeBoor(t0 + time);
     traveled += (point - previous).norm();
-    if (traveled > max_check_distance) break;
-
     const int occupied = edt_environment_->sdf_map_->getInflateOccupancy(point);
     if (occupied != 0) {
       distance = traveled;
       return false;
     }
+    if (traveled > max_check_distance) break;
     previous = point;
   }
   distance = traveled;
@@ -192,9 +194,9 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
     return false;
   }
 
-  if (!sdf_map_->hasFreshPointCloud()) {
+  if (!sdf_map_->hasReadyMap()) {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger("FastPlannerManager"), *clock_, 5000,
-                         "Waiting for a fresh point cloud before planning");
+                         "Waiting for fresh point cloud AND updated ESDF before planning");
     return false;
   }
 
@@ -273,7 +275,16 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
 
     feasible = pos.reallocateTime();
 
-    if (++iter_num >= 3) break;
+    if (++iter_num >= 8) break;
+  }
+
+  // reallocateTime() returns feasibility before its final knot edits.
+  // Recheck the final curve instead of trusting that intermediate result.
+  feasible = pos.checkFeasibility(false);
+  if (!feasible) {
+    RCLCPP_WARN(rclcpp::get_logger("FastPlannerManager"),
+                "Rejecting dynamically infeasible trajectory after time reallocation");
+    return false;
   }
 
   double tn = pos.getTimeSum();

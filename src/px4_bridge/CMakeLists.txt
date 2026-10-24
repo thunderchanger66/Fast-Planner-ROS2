@@ -9,7 +9,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(quadrotor_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 add_executable(px4_bridge_node src/px4_bridge_node.cpp)
@@ -18,7 +17,6 @@ ament_target_dependencies(px4_bridge_node
   rclcpp
   px4_msgs
   quadrotor_msgs
-  nav_msgs
   std_msgs
 )
 

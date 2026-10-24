@@ -44,6 +44,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->declare_parameter<float>("sdf_map/local_update_range_z", 0.5);
   node->declare_parameter<float>("sdf_map/obstacles_inflation", 0.5);
   node->declare_parameter<double>("sdf_map/point_cloud_timeout", 0.5);
+  node->declare_parameter<double>("sdf_map/cloud_voxel_retention_sec", 4.0);
   node->declare_parameter<float>("sdf_map/local_bound_inflate", 0.5);
   node->declare_parameter<int>("sdf_map/local_map_margin", 5);
   node->declare_parameter<float>("sdf_map/ground_height", 0.5);
@@ -85,6 +86,12 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/local_update_range_z", mp_.local_update_range_(2), -1.0);
   node->get_parameter_or("sdf_map/obstacles_inflation", mp_.obstacles_inflation_, -1.0);
   node->get_parameter_or("sdf_map/point_cloud_timeout", mp_.point_cloud_timeout_, 0.5);
+  node->get_parameter_or("sdf_map/cloud_voxel_retention_sec", mp_.cloud_voxel_retention_sec_, 4.0);
+  if (!std::isfinite(mp_.cloud_voxel_retention_sec_) ||
+      mp_.cloud_voxel_retention_sec_ < 0.5 || mp_.cloud_voxel_retention_sec_ > 60.0) {
+    RCLCPP_WARN(node->get_logger(), "Invalid cloud voxel retention; using 4.0 s");
+    mp_.cloud_voxel_retention_sec_ = 4.0;
+  }
   if (!std::isfinite(mp_.point_cloud_timeout_) || mp_.point_cloud_timeout_ <= 0.0) {
     RCLCPP_WARN(node->get_logger(),
                 "sdf_map/point_cloud_timeout must be positive; using 0.5 s");
@@ -195,6 +202,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
     md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_ - mp_.unknown_flag_);
     md_.occupancy_buffer_neg = vector<char>(buffer_size, 0);
     md_.occupancy_buffer_inflate_ = vector<char>(buffer_size, 0);
+    md_.cloud_hit_time_sec_ = vector<double>(buffer_size, 0.0);
 
     md_.distance_buffer_ = vector<double>(buffer_size, 10000);
     md_.distance_buffer_neg_ = vector<double>(buffer_size, 10000);
@@ -259,7 +267,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
     esdf_timer_ = node->create_wall_timer(
         50ms, std::bind(&SDFMap::updateESDFCallback, this));
     vis_timer_ = node->create_wall_timer(
-        50ms, std::bind(&SDFMap::visCallback, this));
+        200ms, std::bind(&SDFMap::visCallback, this));
 
     // Initialize variables
     md_.occ_need_update_ = false;
@@ -928,115 +936,106 @@ void SDFMap::topic_callback(const std_msgs::msg::String::SharedPtr msg)
     // RCLCPP_INFO(node_class_->get_logger(), "I heard: '%s'", msg->data.c_str());
 }
 
-void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr img) {
-    if (!img->header.frame_id.empty() && img->header.frame_id != mp_.frame_id_) {
-      RCLCPP_WARN_THROTTLE(
-        node_->get_logger(), *node_->get_clock(), 5000,
-        "Ignoring point cloud frame '%s'; map frame is '%s' and no TF transform is applied",
-        img->header.frame_id.c_str(), mp_.frame_id_.c_str());
-      return;
-    }
+void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  if (!msg->header.frame_id.empty() && msg->header.frame_id != mp_.frame_id_) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                         "Ignoring point cloud in unexpected frame '%s'",
+                         msg->header.frame_id.c_str());
+    return;
+  }
+  if (!md_.has_odom_ || !md_.camera_pos_.allFinite()) return;
 
-    pcl::PointCloud<pcl::PointXYZ> latest_cloud;
-    pcl::fromROSMsg(*img, latest_cloud);
+  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::fromROSMsg(*msg, cloud);
+  if (cloud.empty()) return;
 
-    if (!md_.has_odom_) {
-        // std::cout << "no odom!" << std::endl;
-        return;
-    }
+  // The input may be a single scan, a sparse filtered scan, or a local map.
+  // Never assume one message contains every wall seen recently. Remember
+  // voxel hits for a bounded time, then age them out (no free-space raycasting).
+  const auto now = std::chrono::steady_clock::now();
+  const double now_sec = std::chrono::duration<double>(now.time_since_epoch()).count();
+  size_t valid_hits = 0;
+  for (const auto& pt : cloud.points) {
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
+    const Eigen::Vector3d point(pt.x, pt.y, pt.z);
+    if (!isInMap(point) ||
+        ((point - md_.camera_pos_).cwiseAbs().array() > mp_.local_update_range_.array()).any())
+      continue;
+    Eigen::Vector3i idx;
+    posToIndex(point, idx);
+    md_.cloud_hit_time_sec_[toAddress(idx)] = now_sec;
+    ++valid_hits;
+  }
+  if (valid_hits == 0) return;
+  md_.has_cloud_ = true;
+  md_.last_cloud_time_ = now;
 
-    if (latest_cloud.points.size() == 0) return;
+  // Rebuild the entire rolling planning window from retained voxel hits.
+  // This avoids a single sparse scan making a previously seen obstacle vanish.
+  // Also clear a padded ring from the previous window when the vehicle moves.
+  Eigen::Vector3i min_idx, max_idx;
+  posToIndex(md_.camera_pos_ - mp_.local_update_range_, min_idx);
+  posToIndex(md_.camera_pos_ + mp_.local_update_range_, max_idx);
+  boundIndex(min_idx);
+  boundIndex(max_idx);
+  const int inflate_steps = std::max(0, static_cast<int>(
+      std::ceil(mp_.obstacles_inflation_ / mp_.resolution_)));
+  // Remember the last update's window and clear its old inflation before
+  // reconstructing. Otherwise ghost voxels remain at window boundaries.
+  Eigen::Vector3i clear_min = min_idx;
+  Eigen::Vector3i clear_max = max_idx;
+  if (cloud_window_initialized_) {
+    clear_min = clear_min.cwiseMin(last_cloud_min_idx_);
+    clear_max = clear_max.cwiseMax(last_cloud_max_idx_);
+  }
+  clear_min -= Eigen::Vector3i::Constant(inflate_steps);
+  clear_max += Eigen::Vector3i::Constant(inflate_steps);
+  boundIndex(clear_min);
+  boundIndex(clear_max);
+  for (int x = clear_min.x(); x <= clear_max.x(); ++x)
+    for (int y = clear_min.y(); y <= clear_max.y(); ++y)
+      for (int z = clear_min.z(); z <= clear_max.z(); ++z)
+        md_.occupancy_buffer_inflate_[toAddress(x, y, z)] = 0;
 
-    if (std::isnan(md_.camera_pos_(0)) || std::isnan(md_.camera_pos_(1)) || std::isnan(md_.camera_pos_(2))) return;
-
-    const bool has_finite_point = std::any_of(
-      latest_cloud.points.begin(), latest_cloud.points.end(), [](const pcl::PointXYZ& point) {
-        return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
-      });
-    if (!has_finite_point) return;
-    md_.has_cloud_ = true;
-    md_.last_cloud_time_ = std::chrono::steady_clock::now();
-
-    this->resetBuffer(md_.camera_pos_ - mp_.local_update_range_,
-                      md_.camera_pos_ + mp_.local_update_range_);
-
-    pcl::PointXYZ pt;
-    Eigen::Vector3d p3d, p3d_inf;
-
-    int inf_step = ceil(mp_.obstacles_inflation_ / mp_.resolution_);
-    int inf_step_z = std::max(
-      1, static_cast<int>(std::ceil(mp_.obstacles_inflation_ / mp_.resolution_)));
-
-    double max_x, max_y, max_z, min_x, min_y, min_z;
-
-    min_x = mp_.map_max_boundary_(0);
-    min_y = mp_.map_max_boundary_(1);
-    min_z = mp_.map_max_boundary_(2);
-
-    max_x = mp_.map_min_boundary_(0);
-    max_y = mp_.map_min_boundary_(1);
-    max_z = mp_.map_min_boundary_(2);
-
-    for (size_t i = 0; i < latest_cloud.points.size(); ++i) {
-        pt = latest_cloud.points[i];
-        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
-        p3d(0) = pt.x, p3d(1) = pt.y, p3d(2) = pt.z;
-
-        /* point inside update range */
-        Eigen::Vector3d devi = p3d - md_.camera_pos_;
-        Eigen::Vector3i inf_pt;
-
-        if (fabs(devi(0)) < mp_.local_update_range_(0) && fabs(devi(1)) < mp_.local_update_range_(1) &&
-            fabs(devi(2)) < mp_.local_update_range_(2)) {
-
-            /* inflate the point */
-            for (int x = -inf_step; x <= inf_step; ++x)
-                for (int y = -inf_step; y <= inf_step; ++y)
-                    for (int z = -inf_step_z; z <= inf_step_z; ++z) {
-
-                        p3d_inf(0) = pt.x + x * mp_.resolution_;
-                        p3d_inf(1) = pt.y + y * mp_.resolution_;
-                        p3d_inf(2) = pt.z + z * mp_.resolution_;
-
-                        max_x = std::max(max_x, p3d_inf(0));
-                        max_y = std::max(max_y, p3d_inf(1));
-                        max_z = std::max(max_z, p3d_inf(2));
-
-                        min_x = std::min(min_x, p3d_inf(0));
-                        min_y = std::min(min_y, p3d_inf(1));
-                        min_z = std::min(min_z, p3d_inf(2));
-
-                        posToIndex(p3d_inf, inf_pt);
-
-                        if (!isInMap(inf_pt)) continue;
-                        // std::cout<<"mp_.map_origin_"<<mp_.map_origin_<<std::endl;
-                        // std::cout<<"mp_.map_voxel_num_"<<mp_.map_voxel_num_<<std::endl;
-                        // std::cout<<"p3d_inf"<<p3d_inf<<"inf_pt"<<inf_pt<<std::endl;
-
-                        int idx_inf = toAddress(inf_pt);
-
-                        md_.occupancy_buffer_inflate_[idx_inf] = 1;
-                    }
+  const double cutoff = now_sec - mp_.cloud_voxel_retention_sec_;
+  for (int x = min_idx.x(); x <= max_idx.x(); ++x)
+    for (int y = min_idx.y(); y <= max_idx.y(); ++y)
+      for (int z = min_idx.z(); z <= max_idx.z(); ++z) {
+        const int address = toAddress(x, y, z);
+        const double last_hit = md_.cloud_hit_time_sec_[address];
+        if (last_hit <= 0.0) continue;
+        if (last_hit < cutoff) {
+          md_.cloud_hit_time_sec_[address] = 0.0;
+          continue;
         }
-    }
+        // Keep inflation clipped to the map. Unobserved cells are NOT
+        // interpreted as proven free space.
+        for (int dx = -inflate_steps; dx <= inflate_steps; ++dx)
+          for (int dy = -inflate_steps; dy <= inflate_steps; ++dy)
+            for (int dz = -inflate_steps; dz <= inflate_steps; ++dz) {
+              const Eigen::Vector3i neighbor(x + dx, y + dy, z + dz);
+              if (isInMap(neighbor)) md_.occupancy_buffer_inflate_[toAddress(neighbor)] = 1;
+            }
+      }
 
-    min_x = std::min(min_x, md_.camera_pos_(0));
-    min_y = std::min(min_y, md_.camera_pos_(1));
-    min_z = std::min(min_z, md_.camera_pos_(2));
+  // Preserve virtual ceiling in the point-cloud code path as well.
+  if (mp_.virtual_ceil_height_ > mp_.map_min_boundary_.z() &&
+      mp_.virtual_ceil_height_ < mp_.map_max_boundary_.z()) {
+    int ceil_z = static_cast<int>(std::floor(
+        (mp_.virtual_ceil_height_ - mp_.map_origin_.z()) * mp_.resolution_inv_));
+    for (int x = min_idx.x(); x <= max_idx.x(); ++x)
+      for (int y = min_idx.y(); y <= max_idx.y(); ++y)
+        md_.occupancy_buffer_inflate_[toAddress(x, y, ceil_z)] = 1;
+  }
 
-    max_x = std::max(max_x, md_.camera_pos_(0));
-    max_y = std::max(max_y, md_.camera_pos_(1));
-    max_z = std::max(max_z, md_.camera_pos_(2));
-
-    max_z = std::max(max_z, mp_.ground_height_);
-
-    posToIndex(Eigen::Vector3d(max_x, max_y, max_z), md_.local_bound_max_);
-    posToIndex(Eigen::Vector3d(min_x, min_y, min_z), md_.local_bound_min_);
-
-    boundIndex(md_.local_bound_min_);
-    boundIndex(md_.local_bound_max_);
-
-    md_.esdf_need_update_ = true;
+  // Recompute a consistent ESDF covering the full active search window,
+  // including the safety inflation ring, after the cloud callback.
+  md_.local_bound_min_ = clear_min;
+  md_.local_bound_max_ = clear_max;
+  last_cloud_min_idx_ = min_idx;
+  last_cloud_max_idx_ = max_idx;
+  cloud_window_initialized_ = true;
+  md_.esdf_need_update_ = true;
 }
 
 void SDFMap::publishMap() {
@@ -1296,6 +1295,10 @@ void SDFMap::checkDist() {
 bool SDFMap::odomValid() {return md_.has_odom_;}
 
 bool SDFMap::hasDepthObservation() {return md_.has_first_depth_;}
+
+bool SDFMap::hasReadyMap() const {
+  return hasFreshPointCloud() && !md_.esdf_need_update_;
+}
 
 bool SDFMap::hasFreshPointCloud() const {
   if (!md_.has_cloud_) return false;

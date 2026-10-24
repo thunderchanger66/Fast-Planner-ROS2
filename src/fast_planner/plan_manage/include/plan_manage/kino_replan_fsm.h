@@ -69,12 +69,18 @@ private:
   double waypoints_[50][3];
   int waypoint_num_;
   double replan_retry_interval_;
+  double tracking_error_replan_{0.45};
+  double tracking_error_emergency_{0.9};
+  double odom_timeout_sec_{0.5};
+  std::chrono::steady_clock::time_point last_odom_time_{};
+  bool odometryFresh() const;
   std::string planning_frame_;
   std::chrono::steady_clock::time_point next_plan_attempt_{
       std::chrono::steady_clock::time_point::min()};
 
   /* planning data */
   bool trigger_{false}, have_target_{false}, have_odom_{false};
+  bool replan_pending_{false};
   FSM_EXEC_STATE exec_state_;
 
   Eigen::Vector3d odom_pos_, odom_vel_;  // odometry state
@@ -91,6 +97,8 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   // rclcpp::Publisher replan_pub_, new_pub_, bspline_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr replan_pub_;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr emergency_stop_pub_;
+  void emergencyStop(const char* reason);
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr new_pub_ ;
   rclcpp::Publisher<quadrotor_msgs::msg::Bspline>::SharedPtr  bspline_pub_;
 

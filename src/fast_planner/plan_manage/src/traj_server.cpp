@@ -38,6 +38,9 @@ class TrajServer : public rclcpp::Node
         cmd.kv[2] = vel_gain[2];
         bspline_sub = this->create_subscription<quadrotor_msgs::msg::Bspline>("planning/bspline", 10, std::bind(&TrajServer::bsplineCallback, this, std::placeholders::_1));
         replan_sub = this->create_subscription<std_msgs::msg::Empty>("planning/replan", 10, std::bind(&TrajServer::replanCallback, this, std::placeholders::_1));
+        emergency_stop_sub = this->create_subscription<std_msgs::msg::Empty>(
+            "/planning/emergency_stop", 10,
+            std::bind(&TrajServer::emergencyStopCallback, this, std::placeholders::_1));
         new_sub = this->create_subscription<std_msgs::msg::Empty>("planning/new", 10, std::bind(&TrajServer::newCallback,    this, std::placeholders::_1));
         odom_sub = this->create_subscription<nav_msgs::msg::Odometry>("/odom_world", 50, std::bind(&TrajServer::odomCallbck, this, std::placeholders::_1));
 
@@ -181,6 +184,11 @@ private:
       candidate_traj.push_back(yaw_traj);
       candidate_traj.push_back(yaw_traj.getDerivative());
 
+      if (receive_traj_ && msg->traj_id <= traj_id_) {
+          RCLCPP_WARN(get_logger(), "Ignoring out-of-order/repeated B-spline id %ld",
+                      static_cast<long>(msg->traj_id));
+          return;
+      }
       const double candidate_duration = candidate_traj[0].getTimeSum();
       if (!std::isfinite(candidate_duration) || candidate_duration <= 0.0) {
           RCLCPP_WARN(get_logger(), "Ignoring B-spline trajectory with invalid duration");
@@ -194,16 +202,34 @@ private:
       traj_duration_ = candidate_duration;
       traj_ = std::move(candidate_traj);
       receive_traj_ = true;
+      emergency_hold_ = false;
+      trajectory_completion_logged_ = false;
+      RCLCPP_INFO(get_logger(), "Accepted trajectory id %d, duration %.2f s",
+                  traj_id_, traj_duration_);
     }
 
-  void replanCallback(const std_msgs::msg::Empty::SharedPtr msg) {
-      /* reset duration */
-      const double time_out = 0.01;
-      rclcpp::Time time_now = this->now();
-      double t_stop = (time_now - start_time_).seconds() + time_out;
-      traj_duration_ = std::min(t_stop, traj_duration_);
+  void replanCallback(const std_msgs::msg::Empty::SharedPtr) {
+      // Legacy topic retained for compatibility: regular replanning must not
+      // truncate a flying trajectory before a replacement is validated.
+      RCLCPP_DEBUG(get_logger(), "Received legacy replan notification");
   }
 
+  void emergencyStopCallback(const std_msgs::msg::Empty::SharedPtr) {
+      if (!have_odom_) {
+          RCLCPP_ERROR(get_logger(), "Cannot hold: no valid odometry available");
+          receive_traj_ = false;
+          emergency_hold_ = false;
+          return;
+      }
+      // Hold at the most recent measured position, NOT the old trajectory's
+      // (possibly colliding) endpoint. This is a commanded stop, not a
+      // dynamically feasible braking guarantee; PX4 failsafes remain needed.
+      hold_pos_ = last_odom_pos_;
+      hold_yaw_ = last_odom_yaw_;
+      emergency_hold_ = true;
+      receive_traj_ = false;
+      RCLCPP_ERROR(get_logger(), "Emergency hold latched; awaiting a new valid B-spline");
+  }
 
   void newCallback(const std_msgs::msg::Empty::SharedPtr msg) {
   traj_cmd_.clear();
@@ -216,8 +242,17 @@ private:
 
     //odom = *msg;
 
-    traj_real_.push_back(
-        Eigen::Vector3d(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z));
+    const Eigen::Vector3d pos(msg->pose.pose.position.x,
+                              msg->pose.pose.position.y, msg->pose.pose.position.z);
+    const Eigen::Quaterniond q(msg->pose.pose.orientation.w,
+                               msg->pose.pose.orientation.x,
+                               msg->pose.pose.orientation.y,
+                               msg->pose.pose.orientation.z);
+    if (!pos.allFinite() || !std::isfinite(q.norm()) || q.norm() < 1e-6) return;
+    last_odom_pos_ = pos;
+    last_odom_yaw_ = std::atan2(q.toRotationMatrix()(1, 0), q.toRotationMatrix()(0, 0));
+    have_odom_ = true;
+    traj_real_.push_back(pos);
 
     if (traj_real_.size() > 10000) traj_real_.erase(traj_real_.begin(), traj_real_.begin() + 1000);
   }
@@ -231,6 +266,22 @@ private:
   void cmdCallback() {
       /* no publishing before receive traj_ */
       //std::cout<<receive_traj_<<"****************"<<std::endl;
+      if (emergency_hold_) {
+          const auto now = this->now();
+          cmd.header.stamp = now;
+          cmd.header.frame_id = frame_id_;
+          cmd.trajectory_flag = quadrotor_msgs::msg::PositionCommand::TRAJECTORY_STATUS_READY;
+          cmd.trajectory_id = traj_id_;
+          cmd.position.x = hold_pos_.x();
+          cmd.position.y = hold_pos_.y();
+          cmd.position.z = hold_pos_.z();
+          cmd.velocity.x = cmd.velocity.y = cmd.velocity.z = 0.0;
+          cmd.acceleration.x = cmd.acceleration.y = cmd.acceleration.z = 0.0;
+          cmd.yaw = hold_yaw_;
+          cmd.yaw_dot = 0.0;
+          pos_cmd_pub->publish(cmd);
+          return;
+      }
       if (!receive_traj_) return;
 
       rclcpp::Time time_now = this->now();
@@ -252,8 +303,12 @@ private:
         pos_f = traj_[0].evaluateDeBoorT(tf);
 
       } else if (std::isfinite(t_cur) && t_cur >= traj_duration_) {
-        //std::cout<<"999999999999900000 " <<receive_traj_<<" 9999999999999 "<<endl;
-        /* hover when finish traj_ */
+        if (!trajectory_completion_logged_) {
+          RCLCPP_WARN(get_logger(),
+                      "Trajectory id %d reached its endpoint; waiting for the next segment",
+                      traj_id_);
+          trajectory_completion_logged_ = true;
+        }
         pos = traj_[0].evaluateDeBoorT(traj_duration_);
         vel.setZero();
         acc.setZero();
@@ -319,7 +374,7 @@ private:
 
 
     rclcpp::Subscription<quadrotor_msgs::msg::Bspline>::SharedPtr bspline_sub;
-    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr replan_sub, new_sub;
+    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr replan_sub, new_sub, emergency_stop_sub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub;
 
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr cmd_vis_pub, traj_pub, real_traj_pub;
@@ -327,9 +382,16 @@ private:
 
     rclcpp::TimerBase::SharedPtr cmd_timer, vis_timer;
     rclcpp::Time start_time_;
-    int traj_id_;
+    int traj_id_ = 0;
     double traj_duration_;
     bool receive_traj_ = false;
+    bool trajectory_completion_logged_ = false;
+    bool emergency_hold_ = false;
+    bool have_odom_ = false;
+    Eigen::Vector3d last_odom_pos_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d hold_pos_{Eigen::Vector3d::Zero()};
+    double last_odom_yaw_{0.0};
+    double hold_yaw_{0.0};
     vector<Eigen::Vector3d> traj_cmd_, traj_real_;
     double last_yaw_ = 0.0;
     vector<NonUniformBspline> traj_;

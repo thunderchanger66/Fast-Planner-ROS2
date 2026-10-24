@@ -50,6 +50,28 @@ Start the planner and its RViz view together with:
 ros2 launch plan_manage fast_planner_lidar_rviz.launch.py
 ```
 
+For the EGO-style SITL control path, start the planner, PX4 Offboard bridge,
+and RViz together with:
+
+```bash
+ros2 launch px4_bridge bringup.launch.py
+```
+
+Start the simulator and FAST-LIO first. This launch starts the Micro XRCE-DDS
+agent by default; pass `start_agent:=false` if another agent already owns UDP
+8888. It keeps the EGO bridge contract: `/drone_0_planning/pos_cmd` in `lidar`,
+transformed into PX4 NED, with Offboard position setpoints streamed at 20 Hz.
+The SITL profile matches the EGO Gazebo run at 0.8 m/s planner velocity and
+1.0 m/s^2 acceleration, with a 0.5 m startup takeoff and 5 m/s bridge
+validation ceiling. The
+planner only produces setpoints; it does not raise the PX4 speed ceiling.
+
+After startup, verify that `/px4_bridge/status` reaches
+`offboard_active_vehicle_armed_tracking_latest_planner_setpoint` and inspect
+`/drone_0_planning/pos_cmd` for nonzero velocity while moving. A visible path
+alone only confirms planning and visualization, not that PX4 accepted the
+setpoints. Keep EGO-Planner stopped while this launch controls the vehicle.
+
 The RViz view includes the live world and inflated local point clouds, the
 kinodynamic path and optimized B-spline, the commanded position, and the
 measured odometry trail. `planning_frame` and `use_sim_time` are forwarded to

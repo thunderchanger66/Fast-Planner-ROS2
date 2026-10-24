@@ -78,7 +78,6 @@ def generate_launch_description():
                 "use_sim_time": use_sim_time,
                 "planner_command_topic": output_topic,
                 "planner_frame": planning_frame,
-                "planner_odometry_topic": odom_topic,
             }],
         ),
         Node(
