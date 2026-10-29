@@ -5,9 +5,8 @@ fastlio2_px4_odom_bridge:
     output_topic: /fmu/in/vehicle_visual_odometry
     input_frame: lidar
     reject_frame_mismatch: true
-    # now uses the ROS clock at publish time. odom_stamp is only appropriate
-    # when the PX4/ROS time bases are known to be aligned.
-    timestamp_mode: now
+    # Timestamp external odometry with PX4's own local-position clock.
+    px4_local_position_topic: /fmu/out/vehicle_local_position_v1
     position_variance_floor: 0.01
     orientation_variance_floor: 0.01
     velocity_variance_floor: 0.04

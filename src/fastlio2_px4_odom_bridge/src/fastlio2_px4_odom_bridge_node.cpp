@@ -9,6 +9,7 @@
 #include <Eigen/Geometry>
 #include <nav_msgs/msg/odometry.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
+#include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 namespace
@@ -35,9 +36,9 @@ public:
   {
     declare_parameter("input_topic", "/fastlio2/lio_odom");
     declare_parameter("output_topic", "/fmu/in/vehicle_visual_odometry");
+    declare_parameter("px4_local_position_topic", "/fmu/out/vehicle_local_position_v1");
     declare_parameter("input_frame", "lidar");
     declare_parameter("reject_frame_mismatch", true);
-    declare_parameter("timestamp_mode", "now");  // now or odom_stamp
     declare_parameter("position_variance_floor", 0.01);
     declare_parameter("orientation_variance_floor", 0.01);
     declare_parameter("velocity_variance_floor", 0.04);
@@ -56,16 +57,12 @@ public:
 
     input_frame_ = get_parameter("input_frame").as_string();
     reject_frame_mismatch_ = get_parameter("reject_frame_mismatch").as_bool();
-    timestamp_mode_ = get_parameter("timestamp_mode").as_string();
     position_floor_ = get_parameter("position_variance_floor").as_double();
     orientation_floor_ = get_parameter("orientation_variance_floor").as_double();
     velocity_floor_ = get_parameter("velocity_variance_floor").as_double();
     translation_ = vector3_parameter("transform_translation");
     world_rotation_ = rotation_parameter("world_rotation_row_major");
     body_to_frd_ = rotation_parameter("body_to_frd_row_major");
-    if (timestamp_mode_ != "now" && timestamp_mode_ != "odom_stamp") {
-      throw std::runtime_error("timestamp_mode must be now or odom_stamp");
-    }
     if (!std::isfinite(position_floor_) || !std::isfinite(orientation_floor_) ||
       !std::isfinite(velocity_floor_) || position_floor_ < 0.0 ||
       orientation_floor_ < 0.0 || velocity_floor_ < 0.0)
@@ -79,6 +76,11 @@ public:
       std::bind(&Fastlio2Px4OdomBridge::odom_callback, this, std::placeholders::_1));
     odom_pub_ = create_publisher<px4_msgs::msg::VehicleOdometry>(
       get_parameter("output_topic").as_string(), qos);
+    local_position_sub_ = create_subscription<px4_msgs::msg::VehicleLocalPosition>(
+      get_parameter("px4_local_position_topic").as_string(), qos,
+      [this](const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {
+        px4_timestamp_us_ = msg->timestamp;
+      });
     RCLCPP_INFO(get_logger(), "FAST-LIO odometry bridge: %s -> %s",
       get_parameter("input_topic").as_string().c_str(),
       get_parameter("output_topic").as_string().c_str());
@@ -112,18 +114,6 @@ private:
       throw std::runtime_error(name + " must be a proper rotation matrix");
     }
     return result;
-  }
-
-  uint64_t timestamp_us(const nav_msgs::msg::Odometry & msg) const
-  {
-    if (timestamp_mode_ == "odom_stamp") {
-      const int64_t ns = static_cast<int64_t>(msg.header.stamp.sec) * 1000000000LL +
-        static_cast<int64_t>(msg.header.stamp.nanosec);
-      if (ns > 0) {
-        return static_cast<uint64_t>(ns / 1000);
-      }
-    }
-    return static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
   }
 
   static float variance(const std::array<double, 36> & covariance, size_t index, double floor)
@@ -166,9 +156,16 @@ private:
     if (!finite(position_ned) || !finite(velocity_ned) || !finite(angular_frd)) {
       return;
     }
+    if (px4_timestamp_us_ == 0) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Waiting for PX4 local-position timestamp before publishing external odometry");
+      return;
+    }
 
     px4_msgs::msg::VehicleOdometry out;
-    out.timestamp = timestamp_us(*msg);
+    // Use PX4's own clock domain; ROS simulation time and FAST-LIO stamps
+    // are not interchangeable with PX4 time in this SITL setup.
+    out.timestamp = px4_timestamp_us_;
     out.timestamp_sample = out.timestamp;
     out.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
     out.position = {static_cast<float>(position_ned.x()), static_cast<float>(position_ned.y()),
@@ -201,7 +198,6 @@ private:
   }
 
   std::string input_frame_;
-  std::string timestamp_mode_;
   bool reject_frame_mismatch_{true};
   double position_floor_{0.01};
   double orientation_floor_{0.01};
@@ -211,7 +207,9 @@ private:
   Matrix3 body_to_frd_{Matrix3::Identity()};
   uint8_t reset_counter_{0};
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr local_position_sub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
+  uint64_t px4_timestamp_us_{0};
 };
 
 int main(int argc, char ** argv)
