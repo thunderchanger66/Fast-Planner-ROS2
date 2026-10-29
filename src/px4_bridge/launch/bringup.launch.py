@@ -12,6 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     bridge_share = get_package_share_directory("px4_bridge")
     planner_share = get_package_share_directory("plan_manage")
+    odom_bridge_share = get_package_share_directory("fastlio2_px4_odom_bridge")
 
     bridge_params = LaunchConfiguration("bridge_params")
     rviz_config = LaunchConfiguration("rviz_config")
@@ -22,6 +23,9 @@ def generate_launch_description():
     goal_topic = LaunchConfiguration("goal_topic")
     output_topic = LaunchConfiguration("output_topic")
     planning_frame = LaunchConfiguration("planning_frame")
+    odom_bridge_params = LaunchConfiguration("odom_bridge_params")
+    start_odom_bridge = LaunchConfiguration("start_odom_bridge")
+    start_rviz = LaunchConfiguration("start_rviz")
 
     planner = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -60,6 +64,13 @@ def generate_launch_description():
             "output_topic", default_value="/drone_0_planning/pos_cmd",
             description="Planner command topic consumed by px4_bridge"),
         DeclareLaunchArgument("planning_frame", default_value="lidar"),
+        DeclareLaunchArgument("start_odom_bridge", default_value="true",
+                              description="Start FAST-LIO2 to PX4 external-odometry fusion bridge"),
+        DeclareLaunchArgument(
+            "odom_bridge_params",
+            default_value=os.path.join(
+                odom_bridge_share, "config", "fastlio2_px4_odom_bridge.yaml")),
+        DeclareLaunchArgument("start_rviz", default_value="true"),
         ExecuteProcess(
             cmd=["MicroXRCEAgent", "udp4", "-p", "8888"],
             name="micro_xrce_agent",
@@ -81,11 +92,20 @@ def generate_launch_description():
             }],
         ),
         Node(
+            package="fastlio2_px4_odom_bridge",
+            executable="fastlio2_px4_odom_bridge_node",
+            name="fastlio2_px4_odom_bridge",
+            output="screen",
+            parameters=[odom_bridge_params],
+            condition=IfCondition(start_odom_bridge),
+        ),
+        Node(
             package="rviz2",
             executable="rviz2",
             name="fast_planner_rviz",
             output="screen",
             arguments=["-d", rviz_config, "-f", planning_frame],
             parameters=[{"use_sim_time": use_sim_time}],
+            condition=IfCondition(start_rviz),
         ),
     ])

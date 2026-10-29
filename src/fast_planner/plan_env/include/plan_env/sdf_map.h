@@ -143,7 +143,7 @@ struct MappingData {
   bool occ_need_update_, local_updated_, esdf_need_update_;
   bool has_first_depth_;
   bool has_odom_, has_cloud_;
-  std::chrono::steady_clock::time_point last_cloud_time_{};
+  rclcpp::Time last_cloud_time_{0, 0, RCL_ROS_TIME};
 
   // depth image projected point cloud
 

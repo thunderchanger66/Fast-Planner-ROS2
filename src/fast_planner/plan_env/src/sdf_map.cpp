@@ -262,11 +262,14 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
         "/sdf_map/depth_cloud", 10);
 
     // Initialize timers
-    occ_timer_ = node->create_wall_timer(
+    // Map/ESDF updates must advance with the same clock as odometry and
+    // trajectory timestamps. A GUI-induced real-time slowdown must not make
+    // the map process the same simulated state repeatedly.
+    occ_timer_ = node->create_timer(
         50ms, std::bind(&SDFMap::updateOccupancyCallback, this));
-    esdf_timer_ = node->create_wall_timer(
+    esdf_timer_ = node->create_timer(
         50ms, std::bind(&SDFMap::updateESDFCallback, this));
-    vis_timer_ = node->create_wall_timer(
+    vis_timer_ = node->create_timer(
         200ms, std::bind(&SDFMap::visCallback, this));
 
     // Initialize variables
@@ -952,8 +955,10 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   // The input may be a single scan, a sparse filtered scan, or a local map.
   // Never assume one message contains every wall seen recently. Remember
   // voxel hits for a bounded time, then age them out (no free-space raycasting).
-  const auto now = std::chrono::steady_clock::now();
-  const double now_sec = std::chrono::duration<double>(now.time_since_epoch()).count();
+  // Use simulation time for retention/freshness. Wall time makes a low Gazebo
+  // real-time factor look like a sensor timeout.
+  const rclcpp::Time now = node_->now();
+  const double now_sec = now.seconds();
   size_t valid_hits = 0;
   for (const auto& pt : cloud.points) {
     if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
@@ -1302,9 +1307,8 @@ bool SDFMap::hasReadyMap() const {
 
 bool SDFMap::hasFreshPointCloud() const {
   if (!md_.has_cloud_) return false;
-  const auto age = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - md_.last_cloud_time_).count();
-  return age <= mp_.point_cloud_timeout_;
+  const double age = (node_->now() - md_.last_cloud_time_).seconds();
+  return std::isfinite(age) && age >= -0.05 && age <= mp_.point_cloud_timeout_;
 }
 
 double SDFMap::getResolution() {return mp_.resolution_;}

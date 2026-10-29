@@ -83,8 +83,11 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   planner_manager_->initPlanModules(nh);
   nh->get_parameter_or("sdf_map/frame_id", planning_frame_, std::string("lidar"));
   visualization_.reset(new PlanningVisualization(nh));
-  exec_timer_ = nh->create_wall_timer(std::chrono::milliseconds(10), std::bind(&KinoReplanFSM::execFSMCallback, this));
-  safety_timer_ = nh->create_wall_timer(std::chrono::milliseconds(50), std::bind(&KinoReplanFSM::checkCollisionCallback, this));
+  // Planning timestamps use node_->now() and the launch enables use_sim_time.
+  // ROS timers keep FSM decisions synchronized with Gazebo /clock when the GUI
+  // lowers the simulation real-time factor.
+  exec_timer_ = nh->create_timer(std::chrono::milliseconds(10), std::bind(&KinoReplanFSM::execFSMCallback, this));
+  safety_timer_ = nh->create_timer(std::chrono::milliseconds(50), std::bind(&KinoReplanFSM::checkCollisionCallback, this));
 
   const auto goal_topic = nh->get_parameter("goal_topic").as_string();
   waypoint_sub_ = nh->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -173,13 +176,14 @@ void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
   // planner's dynamics and position are expressed in header.frame_id (lidar).
   odom_vel_ = odom_orient_ * child_velocity;
 
-  last_odom_time_ = std::chrono::steady_clock::now();
+  last_odom_time_ = node_->now();
   have_odom_ = true;
 }
 
 bool KinoReplanFSM::odometryFresh() const {
-  return have_odom_ && std::chrono::duration<double>(
-      std::chrono::steady_clock::now() - last_odom_time_).count() <= odom_timeout_sec_;
+  if (!have_odom_) return false;
+  const double age = (node_->now() - last_odom_time_).seconds();
+  return std::isfinite(age) && age >= -0.05 && age <= odom_timeout_sec_;
 }
 
 void KinoReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call) {
@@ -232,7 +236,7 @@ void KinoReplanFSM::execFSMCallback() {
       break;}
 
     case GEN_NEW_TRAJ:{
-      if (std::chrono::steady_clock::now() < next_plan_attempt_) return;
+      if (node_->now() < next_plan_attempt_) return;
       if ((odom_pos_ - end_pt_).norm() < no_replan_thresh_) {
         have_target_ = false;
         changeFSMExecState(WAIT_TARGET, "GOAL_REACHED");
@@ -245,12 +249,10 @@ void KinoReplanFSM::execFSMCallback() {
       start_yaw_(1) = start_yaw_(2) = 0.0;
       if (callKinodynamicReplan()) {
         replan_pending_ = false;
-        next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
+        next_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
-        next_plan_attempt_ = std::chrono::steady_clock::now() +
-          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(replan_retry_interval_));
+        next_plan_attempt_ = node_->now() + rclcpp::Duration::from_seconds(replan_retry_interval_);
         changeFSMExecState(GEN_NEW_TRAJ, "FSM");
       }
       break;}
@@ -270,7 +272,7 @@ void KinoReplanFSM::execFSMCallback() {
             if (t_cur >= info->duration_ - 1e-2) {
               // The planned endpoint is not proof that the aircraft reached
               // it. Keep the goal and generate a new segment from live odometry.
-              next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
+              next_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
               changeFSMExecState(GEN_NEW_TRAJ, "TRAJ_END_BEFORE_GOAL");
               return;
             }
@@ -280,7 +282,7 @@ void KinoReplanFSM::execFSMCallback() {
             if (tracking_error >= tracking_error_emergency_) {
               emergencyStop("tracking error exceeds emergency threshold");
               changeFSMExecState(GEN_NEW_TRAJ, "TRACKING_ERROR_STOP");
-            } else if (std::chrono::steady_clock::now() >= next_plan_attempt_ &&
+            } else if (node_->now() >= next_plan_attempt_ &&
                 (replan_pending_ || tracking_error >= tracking_error_replan_ ||
                  (info->start_pos_ - planned_pos).norm() >= replan_thresh_)) {
               changeFSMExecState(REPLAN_TRAJ, "FSM");
@@ -288,7 +290,7 @@ void KinoReplanFSM::execFSMCallback() {
             break;
           }
     case REPLAN_TRAJ:{
-      if (std::chrono::steady_clock::now() < next_plan_attempt_) return;
+      if (node_->now() < next_plan_attempt_) return;
       start_pt_ = odom_pos_;
       start_vel_ = odom_vel_;
       start_acc_.setZero();
@@ -302,13 +304,11 @@ void KinoReplanFSM::execFSMCallback() {
       bool success = callKinodynamicReplan();
       if (success) {
         replan_pending_ = false;
-        next_plan_attempt_ = std::chrono::steady_clock::time_point::min();
+        next_plan_attempt_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
         changeFSMExecState(EXEC_TRAJ, "FSM");
       } else {
         replan_pending_ = true;
-        next_plan_attempt_ = std::chrono::steady_clock::now() +
-          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(replan_retry_interval_));
+        next_plan_attempt_ = node_->now() + rclcpp::Duration::from_seconds(replan_retry_interval_);
         LocalTrajData* info = &planner_manager_->local_data_;
         const double elapsed = (node_->get_clock()->now() - info->start_time_).seconds();
         if (elapsed < info->duration_ - 0.1) {

@@ -6,7 +6,10 @@
     fsm/tracking_error_replan: 0.4
     fsm/tracking_error_emergency: 1.5
     fsm/odom_timeout_sec: 0.5
-    fsm/thresh_no_replan: 0.2
+    # Match EGO's measured-goal completion tolerance. The planner must use
+    # live odometry to decide completion; a trajectory endpoint is not proof
+    # that PX4 reached the target.
+    fsm/thresh_no_replan: 0.05
     fsm/replan_retry_interval: 0.25
     fsm/waypoint_num: 1
     fsm/waypoint0_x: 0.0
@@ -19,21 +22,23 @@
     fsm/waypoint2_y: 0.0
     fsm/waypoint2_z: 1.0
     sdf_map/resolution: 0.10
-    sdf_map/map_size_x: 40.0
-    sdf_map/map_size_y: 40.0
-    sdf_map/map_size_z: 8.0
-    sdf_map/local_update_range_x: 8.0
-    sdf_map/local_update_range_y: 8.0
+    # EGO-compatible comparison baseline. Keep map geometry, resolution and
+    # inflation equal; only the planning algorithm should differ.
+    sdf_map/map_size_x: 10.0
+    sdf_map/map_size_y: 10.0
+    sdf_map/map_size_z: 4.0
+    sdf_map/local_update_range_x: 5.5
+    sdf_map/local_update_range_y: 5.5
     sdf_map/local_update_range_z: 4.0
-    sdf_map/obstacles_inflation: 0.4
+    sdf_map/obstacles_inflation: 0.19
     sdf_map/point_cloud_timeout: 0.5
     sdf_map/cloud_voxel_retention_sec: 4.0
     sdf_map/local_bound_inflate: 0.0
     sdf_map/local_map_margin: 5
-    sdf_map/ground_height: -2.0
+    sdf_map/ground_height: -0.01
     sdf_map/esdf_slice_height: 0.3
-    sdf_map/visualization_truncate_height: 6.0
-    sdf_map/virtual_ceil_height: 6.0
+    sdf_map/visualization_truncate_height: 1.8
+    sdf_map/virtual_ceil_height: 2.9
     sdf_map/show_occ_time: false
     sdf_map/show_esdf_time: false
     sdf_map/pose_type: 2
@@ -51,8 +56,8 @@
     manager/max_jerk: 4.0
     manager/dynamic_environment: 0
     manager/local_segment_length: 6.0
-    manager/clearance_threshold: 0.35
-    manager/control_points_distance: 0.5
+    manager/clearance_threshold: 0.19
+    manager/control_points_distance: 0.4
     manager/use_geometric_path: false
     manager/use_kinodynamic_path: true
     manager/use_optimization: true
@@ -65,7 +70,7 @@
     search/lambda_heu: 5.0
     search/resolution_astar: 0.1
     search/time_resolution: 0.8
-    search/margin: 0.35
+    search/margin: 0.19
     search/allocate_num: 100000
     search/check_num: 8
     optimization/lambda1: 10.0
@@ -75,7 +80,7 @@
     optimization/lambda5: 0.0
     optimization/lambda6: 0.0
     optimization/lambda7: 100.0
-    optimization/dist0: 0.45
+    optimization/dist0: 0.5
     optimization/max_vel: 0.8
     optimization/max_acc: 1.0
     optimization/max_iteration_num1: 2

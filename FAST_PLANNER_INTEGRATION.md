@@ -22,12 +22,11 @@ and configure the bridge frame consistently; merely renaming the planner
 frame does not transform the command coordinates. The current default matches
 the PX4 bridge's `lidar` frame.
 
-Build the planner after building `plan_ws` (which provides the shared
-`quadrotor_msgs` package):
+Build this workspace independently. It contains its own `quadrotor_msgs`,
+`px4_msgs`, PX4 command bridge, and FAST-LIO2-to-PX4 odometry bridge:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source /home/thunder/GRA_1/plan_ws/install/setup.bash
 cd /home/thunder/GRA_1/Fast-Planner-ROS2
 colcon build --symlink-install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
@@ -50,21 +49,31 @@ Start the planner and its RViz view together with:
 ros2 launch plan_manage fast_planner_lidar_rviz.launch.py
 ```
 
-For the EGO-style SITL control path, start the planner, PX4 Offboard bridge,
-and RViz together with:
+For the EGO-style SITL control path, start Fast-Planner, the PX4 Offboard
+bridge, the FAST-LIO2-to-PX4 external-odometry fusion bridge, and RViz together
+with:
 
 ```bash
+source /home/thunder/GRA_1/Fast-Planner-ROS2/install/setup.bash
 ros2 launch px4_bridge bringup.launch.py
 ```
 
 Start the simulator and FAST-LIO first. This launch starts the Micro XRCE-DDS
 agent by default; pass `start_agent:=false` if another agent already owns UDP
-8888. It keeps the EGO bridge contract: `/drone_0_planning/pos_cmd` in `lidar`,
+8888. The bringup starts `fastlio2_px4_odom_bridge` by default; pass
+`start_odom_bridge:=false` only when the odometry fusion bridge is already
+running. It keeps the EGO bridge contract: `/drone_0_planning/pos_cmd` in `lidar`,
 transformed into PX4 NED, with Offboard position setpoints streamed at 20 Hz.
 The SITL profile matches the EGO Gazebo run at 0.8 m/s planner velocity and
 1.0 m/s^2 acceleration, with a 0.5 m startup takeoff and 5 m/s bridge
 validation ceiling. The
 planner only produces setpoints; it does not raise the PX4 speed ceiling.
+
+The comparison baseline aligns Fast-Planner's map size, resolution, local
+update range, obstacle inflation, ground/ceiling bounds, velocity and
+acceleration limits with the current EGO launch. A larger map or different
+inflation must be treated as a separate parameter experiment, because it
+changes the planning problem rather than only the algorithm.
 
 After startup, verify that `/px4_bridge/status` reaches
 `offboard_active_vehicle_armed_tracking_latest_planner_setpoint` and inspect

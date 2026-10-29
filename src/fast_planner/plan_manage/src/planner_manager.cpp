@@ -189,8 +189,11 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
             << start_acc.transpose() << "\ngoal:" << end_pt.transpose() << ", " << end_vel.transpose()
             << std::endl;
 
-  if ((start_pt - end_pt).norm() < 0.2) {
-    std::cout << "Close goal" << std::endl;
+  // Goal completion is decided by the FSM from measured odometry. This
+  // routine must not turn a still-unreached goal into a planning failure merely
+  // because the current estimate is within a hard-coded 20 cm.
+  if ((start_pt - end_pt).norm() < 1e-3) {
+    std::cout << "Start and goal coincide" << std::endl;
     return false;
   }
 

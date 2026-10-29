@@ -49,8 +49,10 @@ class TrajServer : public rclcpp::Node
         traj_pub = this->create_publisher<visualization_msgs::msg::Marker>("planning/travel_traj", 10);
         real_traj_pub = this->create_publisher<visualization_msgs::msg::Marker>("planning/travel_real", 10);
 
-        cmd_timer = this->create_wall_timer(10ms, std::bind(&TrajServer::cmdCallback, this));
-        vis_timer = this->create_wall_timer(250ms, std::bind(&TrajServer::visCallback, this));
+        // Trajectory evaluation uses the ROS simulation clock. Wall timers run
+        // ahead when Gazebo rendering slows the real-time factor.
+        cmd_timer = this->create_timer(10ms, std::bind(&TrajServer::cmdCallback, this));
+        vis_timer = this->create_timer(250ms, std::bind(&TrajServer::visCallback, this));
 
     }
 
@@ -239,6 +241,12 @@ private:
 
   void odomCallbck(const nav_msgs::msg::Odometry::SharedPtr msg) {
     if (msg->child_frame_id == "X" || msg->child_frame_id == "O") return;
+    if (!msg->header.frame_id.empty() && msg->header.frame_id != frame_id_) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                           "Ignoring odometry in frame '%s'; trajectory frame is '%s'",
+                           msg->header.frame_id.c_str(), frame_id_.c_str());
+      return;
+    }
 
     //odom = *msg;
 

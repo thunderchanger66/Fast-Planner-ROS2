@@ -72,11 +72,10 @@ private:
   double tracking_error_replan_{0.45};
   double tracking_error_emergency_{0.9};
   double odom_timeout_sec_{0.5};
-  std::chrono::steady_clock::time_point last_odom_time_{};
+  rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
   bool odometryFresh() const;
   std::string planning_frame_;
-  std::chrono::steady_clock::time_point next_plan_attempt_{
-      std::chrono::steady_clock::time_point::min()};
+  rclcpp::Time next_plan_attempt_{0, 0, RCL_ROS_TIME};
 
   /* planning data */
   bool trigger_{false}, have_target_{false}, have_odom_{false};

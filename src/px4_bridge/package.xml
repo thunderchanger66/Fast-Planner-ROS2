@@ -12,6 +12,7 @@
   <depend>quadrotor_msgs</depend>
   <depend>std_msgs</depend>
   <exec_depend>plan_manage</exec_depend>
+  <exec_depend>fastlio2_px4_odom_bridge</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
