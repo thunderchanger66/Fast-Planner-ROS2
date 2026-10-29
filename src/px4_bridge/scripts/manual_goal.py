@@ -12,7 +12,7 @@ from std_msgs.msg import Empty, Float64, String
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Send an EGO goal position and optionally hold a manual yaw.")
+        description="Send a planner-frame goal position and optionally hold a manual yaw.")
     parser.add_argument("x", type=float, help="goal x in the planner frame, metres")
     parser.add_argument("y", type=float, help="goal y in the planner frame, metres")
     parser.add_argument("z", type=float, help="goal z in the planner frame, metres")
@@ -29,8 +29,8 @@ def parse_args():
         "--clear-manual-yaw-topic", default="/px4_bridge/clear_manual_yaw")
     parser.add_argument("--status-topic", default="/px4_bridge/status")
     parser.add_argument(
-        "--wait-timeout", type=float, default=10.0,
-        help="seconds to wait for the goal and bridge subscribers")
+        "--wait-timeout", type=float, default=30.0,
+        help="seconds to wait for subscribers, yaw acknowledgement, and startup takeoff")
     args = parser.parse_args()
     if args.auto_yaw and args.yaw_deg is not None:
         parser.error("do not provide yaw_deg together with --auto-yaw")
@@ -92,6 +92,20 @@ def main():
             rclpy.spin_once(node, timeout_sec=0.1)
         else:
             raise RuntimeError("bridge did not acknowledge the requested yaw mode")
+
+        # Wait for the bridge's controlled startup takeoff. A one-shot goal
+        # published earlier can be lost while the bridge intentionally rejects
+        # planner trajectories during that profile.
+        ready_deadline = time.monotonic() + args.wait_timeout
+        while rclpy.ok() and time.monotonic() < ready_deadline:
+            if any(status.startswith(
+                    "startup_takeoff_reached_target_waiting_for_planner_goal")
+                    for status in bridge_status):
+                break
+            rclpy.spin_once(node, timeout_sec=0.1)
+        else:
+            raise RuntimeError(
+                "bridge did not report a completed startup takeoff; do not send a goal yet")
 
         goal = PoseStamped()
         goal.header.stamp = node.get_clock().now().to_msg()

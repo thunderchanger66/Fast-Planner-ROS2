@@ -950,8 +950,6 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
 
   pcl::PointCloud<pcl::PointXYZ> cloud;
   pcl::fromROSMsg(*msg, cloud);
-  if (cloud.empty()) return;
-
   // The input may be a single scan, a sparse filtered scan, or a local map.
   // Never assume one message contains every wall seen recently. Remember
   // voxel hits for a bounded time, then age them out (no free-space raycasting).
@@ -959,6 +957,11 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
   // real-time factor look like a sensor timeout.
   const rclcpp::Time now = node_->now();
   const double now_sec = now.seconds();
+  // A valid empty scan is still evidence that the sensor stream is alive.
+  md_.has_cloud_ = true;
+  md_.last_cloud_time_ = now;
+  if (cloud.empty()) return;
+
   size_t valid_hits = 0;
   for (const auto& pt : cloud.points) {
     if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
@@ -972,8 +975,6 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     ++valid_hits;
   }
   if (valid_hits == 0) return;
-  md_.has_cloud_ = true;
-  md_.last_cloud_time_ = now;
 
   // Rebuild the entire rolling planning window from retained voxel hits.
   // This avoids a single sparse scan making a previously seen obstacle vanish.

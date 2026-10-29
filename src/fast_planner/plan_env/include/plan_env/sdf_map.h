@@ -121,7 +121,7 @@ struct MappingData {
   std::vector<double> occupancy_buffer_;
   std::vector<char> occupancy_buffer_neg;
   std::vector<char> occupancy_buffer_inflate_;
-  std::vector<double> cloud_hit_time_sec_;  // Steady-clock timestamp per voxel; 0 = unseen.
+  std::vector<double> cloud_hit_time_sec_;  // ROS-clock timestamp per voxel; 0 = unseen.
   std::vector<double> distance_buffer_;
   std::vector<double> distance_buffer_neg_;
   std::vector<double> distance_buffer_all_;

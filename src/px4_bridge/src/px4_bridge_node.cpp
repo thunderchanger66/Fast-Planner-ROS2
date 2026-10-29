@@ -243,12 +243,10 @@ private:
     const std::array<uint8_t, 3> counters{
       msg->xy_reset_counter, msg->z_reset_counter, msg->heading_reset_counter};
     if (reset_counters_ && counters != *reset_counters_) {
-      reset_blocked_ = true;
-      Setpoint hold;
-      hold.position = *local_position_;
-      hold.yaw = std::isfinite(msg->heading) ? msg->heading : 0.0;
-      latest_setpoint_ = hold;
-      publish_status("blocked_px4_estimator_reset_holding_current_px4_position");
+      // Counter increments are expected while PX4 aligns EV origin and
+      // switches its height reference. FAST-LIO discontinuities are guarded
+      // by the dedicated odometry bridge; do not freeze valid commands here.
+      publish_status("px4_estimator_reset_counter_changed_continuing_with_latest_command");
     }
     reset_counters_ = counters;
   }
@@ -306,10 +304,6 @@ private:
       return;
     }
     takeoff_rejection_reported_ = false;
-    if (reset_blocked_) {
-      publish_status("rejected_command_after_px4_estimator_reset_restart_and_recalibrate");
-      return;
-    }
     if (msg->header.frame_id != planner_frame_) {
       publish_status("rejected_frame:" +
         (msg->header.frame_id.empty() ? std::string("<empty>") : msg->header.frame_id) +
@@ -432,13 +426,10 @@ private:
       return;
     }
     update_startup_takeoff_setpoint();
-    if (reset_blocked_ && !first_command_time_) {
-      return;
-    }
     if (!latest_setpoint_ || observe_only_) {
       return;
     }
-    if (!calibration_valid_ && !reset_blocked_) {
+    if (!calibration_valid_) {
       publish_status("blocked_calibration_valid_is_false");
       return;
     }
@@ -467,7 +458,7 @@ private:
     setpoint.yawspeed = static_cast<float>(latest_setpoint_->yaw_rate);
     setpoint_pub_->publish(setpoint);
     // Never begin/re-arm automatically while a safety hold is latched.
-    if (bridge_emergency_hold_ || reset_blocked_ || !start_offboard_) {
+    if (bridge_emergency_hold_ || !start_offboard_) {
       return;
     }
     const auto elapsed = std::chrono::duration<double>(
@@ -481,8 +472,11 @@ private:
     }
     const bool disarmed = vehicle_status_->arming_state ==
       px4_msgs::msg::VehicleStatus::ARMING_STATE_DISARMED;
-    if (!vehicle_status_->pre_flight_checks_pass || (vehicle_status_->failsafe && !disarmed)) {
-      publish_status("mode_request_waiting_for_px4_preflight_or_armed_failsafe");
+    // Evaluate pre-flight requirements after switching to Offboard. The
+    // previous AUTO_LOITER intent requires global position and can otherwise
+    // deadlock a GNSS-free external-vision setup.
+    if (vehicle_status_->failsafe && !disarmed) {
+      publish_status("mode_request_waiting_for_armed_failsafe_clear");
       return;
     }
 
@@ -500,6 +494,11 @@ private:
     }
     if (vehicle_status_->nav_state != px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
       publish_status("px4_left_offboard_mode_bridge_will_not_override_current_px4_mode");
+      return;
+    }
+
+    if (!vehicle_status_->pre_flight_checks_pass) {
+      publish_status("offboard_active_waiting_for_px4_preflight");
       return;
     }
 
@@ -526,6 +525,9 @@ private:
       publish_status("offboard_active_vehicle_armed_tracking_latest_planner_setpoint");
     } else {
       publish_status("offboard_active_vehicle_disarmed_tracking_latest_planner_setpoint");
+    }
+    if (startup_takeoff_complete_) {
+      publish_status("startup_takeoff_reached_target_waiting_for_planner_goal");
     }
   }
 
@@ -594,7 +596,6 @@ private:
   bool arm_on_first_{false};
   bool offboard_requested_{false};
   bool arm_requested_{false};
-  bool reset_blocked_{false};
   double prestream_seconds_{1.0};
   double max_command_age_sec_{0.5};
   double planner_watchdog_timeout_sec_{0.5};

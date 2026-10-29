@@ -24,12 +24,12 @@
     sdf_map/resolution: 0.10
     # EGO-compatible comparison baseline. Keep map geometry, resolution and
     # inflation equal; only the planning algorithm should differ.
-    sdf_map/map_size_x: 10.0
-    sdf_map/map_size_y: 10.0
+    sdf_map/map_size_x: 80.0
+    sdf_map/map_size_y: 80.0
     sdf_map/map_size_z: 4.0
-    sdf_map/local_update_range_x: 5.5
-    sdf_map/local_update_range_y: 5.5
-    sdf_map/local_update_range_z: 4.0
+    sdf_map/local_update_range_x: 10.0
+    sdf_map/local_update_range_y: 10.0
+    sdf_map/local_update_range_z: 3.0
     sdf_map/obstacles_inflation: 0.19
     sdf_map/point_cloud_timeout: 0.5
     sdf_map/cloud_voxel_retention_sec: 4.0

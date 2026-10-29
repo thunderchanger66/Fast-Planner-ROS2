@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,13 @@ public:
     declare_parameter("position_variance_floor", 0.01);
     declare_parameter("orientation_variance_floor", 0.01);
     declare_parameter("velocity_variance_floor", 0.04);
+    declare_parameter("max_linear_speed_mps", 8.0);
+    declare_parameter("max_horizontal_position_m", 50.0);
+    declare_parameter("max_vertical_position_m", 8.0);
+    declare_parameter("max_position_step_slack_m", 0.35);
+    declare_parameter("max_position_velocity_residual_m", 0.25);
+    declare_parameter("max_sample_interval_sec", 0.75);
+    declare_parameter("max_attitude_step_rad", 1.3);
     declare_parameter("transform_translation", std::vector<double>{0.0, 0.0, 0.0});
     declare_parameter("world_rotation_row_major", std::vector<double>{
       0.0, 1.0, 0.0,
@@ -60,12 +68,29 @@ public:
     position_floor_ = get_parameter("position_variance_floor").as_double();
     orientation_floor_ = get_parameter("orientation_variance_floor").as_double();
     velocity_floor_ = get_parameter("velocity_variance_floor").as_double();
+    max_linear_speed_mps_ = get_parameter("max_linear_speed_mps").as_double();
+    max_horizontal_position_m_ = get_parameter("max_horizontal_position_m").as_double();
+    max_vertical_position_m_ = get_parameter("max_vertical_position_m").as_double();
+    max_position_step_slack_m_ = get_parameter("max_position_step_slack_m").as_double();
+    max_position_velocity_residual_m_ =
+      get_parameter("max_position_velocity_residual_m").as_double();
+    max_sample_interval_sec_ = get_parameter("max_sample_interval_sec").as_double();
+    max_attitude_step_rad_ = get_parameter("max_attitude_step_rad").as_double();
     translation_ = vector3_parameter("transform_translation");
     world_rotation_ = rotation_parameter("world_rotation_row_major");
     body_to_frd_ = rotation_parameter("body_to_frd_row_major");
     if (!std::isfinite(position_floor_) || !std::isfinite(orientation_floor_) ||
       !std::isfinite(velocity_floor_) || position_floor_ < 0.0 ||
-      orientation_floor_ < 0.0 || velocity_floor_ < 0.0)
+      orientation_floor_ < 0.0 || velocity_floor_ < 0.0 ||
+      !std::isfinite(max_linear_speed_mps_) || max_linear_speed_mps_ <= 0.0 ||
+      !std::isfinite(max_horizontal_position_m_) || max_horizontal_position_m_ <= 0.0 ||
+      !std::isfinite(max_vertical_position_m_) || max_vertical_position_m_ <= 0.0 ||
+      !std::isfinite(max_position_step_slack_m_) || max_position_step_slack_m_ < 0.0 ||
+      !std::isfinite(max_position_velocity_residual_m_) ||
+      max_position_velocity_residual_m_ < 0.0 ||
+      !std::isfinite(max_sample_interval_sec_) || max_sample_interval_sec_ <= 0.0 ||
+      !std::isfinite(max_attitude_step_rad_) || max_attitude_step_rad_ <= 0.0 ||
+      max_attitude_step_rad_ > 3.141592653589793)
     {
       throw std::runtime_error("variance floors must be finite and non-negative");
     }
@@ -124,6 +149,9 @@ private:
 
   void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    if (fault_latched_) {
+      return;
+    }
     if (reject_frame_mismatch_ && msg->header.frame_id != input_frame_) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "Rejecting odometry frame '%s'; expected '%s'", msg->header.frame_id.c_str(), input_frame_.c_str());
@@ -151,10 +179,65 @@ private:
     const Matrix3 frd_to_body = body_to_frd_.transpose();
     const Matrix3 ned_from_frd = world_rotation_ * body_to_lidar * frd_to_body;
     const Vector3 position_ned = world_rotation_ * position_in + translation_;
-    const Vector3 velocity_ned = world_rotation_ * body_to_lidar * velocity_body;
+    Vector3 velocity_ned = world_rotation_ * body_to_lidar * velocity_body;
     const Vector3 angular_frd = body_to_frd_ * angular_body;
-    if (!finite(position_ned) || !finite(velocity_ned) || !finite(angular_frd)) {
+    const Eigen::Quaterniond q_out(ned_from_frd);
+    if (!finite(position_ned) || !finite(velocity_ned) || !finite(angular_frd) ||
+      !std::isfinite(q_out.norm()) || q_out.norm() < 1e-6)
+    {
+      latch_fault("transformed odometry contains invalid values");
       return;
+    }
+    if (std::hypot(position_ned.x(), position_ned.y()) > max_horizontal_position_m_ ||
+      std::abs(position_ned.z()) > max_vertical_position_m_)
+    {
+      latch_fault("odometry position exceeded configured local-flight bounds");
+      return;
+    }
+    const int64_t stamp_ns = static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+      msg->header.stamp.nanosec;
+    if (stamp_ns <= 0) {
+      latch_fault("odometry timestamp is zero or negative");
+      return;
+    }
+    const double speed = velocity_ned.norm();
+    if (!std::isfinite(speed) || speed > max_linear_speed_mps_) {
+      latch_fault("odometry velocity exceeded max_linear_speed_mps");
+      return;
+    }
+    bool attitude_jump = false;
+    if (last_stamp_ns_) {
+      const double dt = static_cast<double>(stamp_ns - *last_stamp_ns_) / 1e9;
+      if (dt <= 0.0) {
+        latch_fault("odometry timestamp repeated or moved backwards");
+        return;
+      }
+      const double allowed_step = max_position_step_slack_m_ + max_linear_speed_mps_ * dt;
+      if ((position_ned - *last_position_ned_).norm() > allowed_step) {
+        latch_fault("position jumped farther than the configured speed bound allows");
+        return;
+      }
+      attitude_jump = q_out.angularDistance(*last_orientation_) > max_attitude_step_rad_;
+      if (dt <= max_sample_interval_sec_ && !attitude_jump) {
+        const Vector3 expected_step = 0.5 * (*last_velocity_ned_ + velocity_ned) * dt;
+        if (((position_ned - *last_position_ned_) - expected_step).norm() >
+          max_position_velocity_residual_m_)
+        {
+          latch_fault("position and velocity estimates became inconsistent");
+          return;
+        }
+      } else {
+        if (dt > max_sample_interval_sec_) {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            "FAST-LIO sample gap %.3f s; accepting valid absolute pose and restarting continuity checks",
+            dt);
+        }
+      }
+    }
+    if (attitude_jump) {
+      velocity_ned.setZero();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "FAST-LIO attitude jumped; publishing position while suppressing velocity for this sample");
     }
     if (px4_timestamp_us_ == 0) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
@@ -170,7 +253,6 @@ private:
     out.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
     out.position = {static_cast<float>(position_ned.x()), static_cast<float>(position_ned.y()),
       static_cast<float>(position_ned.z())};
-    const Eigen::Quaterniond q_out(ned_from_frd);
     out.q = {static_cast<float>(q_out.w()), static_cast<float>(q_out.x()),
       static_cast<float>(q_out.y()), static_cast<float>(q_out.z())};
     out.velocity_frame = px4_msgs::msg::VehicleOdometry::VELOCITY_FRAME_NED;
@@ -186,15 +268,26 @@ private:
       variance(msg->pose.covariance, 21, orientation_floor_),
       variance(msg->pose.covariance, 28, orientation_floor_),
       variance(msg->pose.covariance, 35, orientation_floor_)};
-    out.velocity_variance = {
+    out.velocity_variance = attitude_jump ? std::array<float, 3>{100.0F, 100.0F, 100.0F} :
+      std::array<float, 3>{
       variance(msg->twist.covariance, 0, velocity_floor_),
       variance(msg->twist.covariance, 7, velocity_floor_),
       variance(msg->twist.covariance, 14, velocity_floor_)};
-    // FAST-LIO does not expose a reset counter in nav_msgs/Odometry. Keep a
-    // stable counter until a future discontinuity detector is added.
     out.reset_counter = reset_counter_;
     out.quality = 100;
     odom_pub_->publish(out);
+    last_stamp_ns_ = stamp_ns;
+    last_position_ned_ = position_ned;
+    last_velocity_ned_ = velocity_ned;
+    last_orientation_ = q_out;
+  }
+
+  void latch_fault(const std::string & reason)
+  {
+    fault_latched_ = true;
+    RCLCPP_ERROR(get_logger(),
+      "External odometry disabled: %s. Restart this bridge only after FAST-LIO is healthy.",
+      reason.c_str());
   }
 
   std::string input_frame_;
@@ -202,10 +295,22 @@ private:
   double position_floor_{0.01};
   double orientation_floor_{0.01};
   double velocity_floor_{0.04};
+  double max_linear_speed_mps_{8.0};
+  double max_horizontal_position_m_{50.0};
+  double max_vertical_position_m_{8.0};
+  double max_position_step_slack_m_{0.35};
+  double max_position_velocity_residual_m_{0.25};
+  double max_sample_interval_sec_{0.75};
+  double max_attitude_step_rad_{1.3};
   Vector3 translation_{};
   Matrix3 world_rotation_{Matrix3::Identity()};
   Matrix3 body_to_frd_{Matrix3::Identity()};
   uint8_t reset_counter_{0};
+  bool fault_latched_{false};
+  std::optional<int64_t> last_stamp_ns_;
+  std::optional<Vector3> last_position_ned_;
+  std::optional<Vector3> last_velocity_ned_;
+  std::optional<Eigen::Quaterniond> last_orientation_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr local_position_sub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
