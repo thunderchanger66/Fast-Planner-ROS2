@@ -82,6 +82,9 @@ public:
     declare_parameter("max_yaw_rate_rps", 3.0);
     declare_parameter("startup_takeoff_altitude_m", 0.0);
     declare_parameter("startup_takeoff_tolerance_m", 0.08);
+    declare_parameter("startup_takeoff_duration_sec", 2.5);
+    declare_parameter("startup_takeoff_velocity_tolerance_mps", 0.12);
+    declare_parameter("startup_takeoff_stable_samples", 10);
     declare_parameter("transform_translation", std::vector<double>{0.0, 0.0, 0.0});
     declare_parameter("transform_rotation_row_major", std::vector<double>{
       1.0, 0.0, 0.0,
@@ -104,8 +107,16 @@ public:
     max_yaw_rate_rps_ = get_parameter("max_yaw_rate_rps").as_double();
     startup_takeoff_altitude_m_ = get_parameter("startup_takeoff_altitude_m").as_double();
     startup_takeoff_tolerance_m_ = get_parameter("startup_takeoff_tolerance_m").as_double();
+    startup_takeoff_duration_sec_ = get_parameter("startup_takeoff_duration_sec").as_double();
+    startup_takeoff_velocity_tolerance_mps_ =
+      get_parameter("startup_takeoff_velocity_tolerance_mps").as_double();
+    startup_takeoff_required_samples_ =
+      get_parameter("startup_takeoff_stable_samples").as_int();
     if (!std::isfinite(startup_takeoff_altitude_m_) || startup_takeoff_altitude_m_ < 0.0 ||
-      !std::isfinite(startup_takeoff_tolerance_m_) || startup_takeoff_tolerance_m_ <= 0.0)
+      !std::isfinite(startup_takeoff_tolerance_m_) || startup_takeoff_tolerance_m_ <= 0.0 ||
+      !std::isfinite(startup_takeoff_velocity_tolerance_mps_) ||
+      startup_takeoff_velocity_tolerance_mps_ <= 0.0 || startup_takeoff_duration_sec_ <= 0.0 ||
+      startup_takeoff_required_samples_ < 1)
     {
       throw std::runtime_error("startup takeoff altitude and tolerance must be valid");
     }
@@ -200,20 +211,34 @@ private:
     if (!startup_takeoff_initialized_ && startup_takeoff_altitude_m_ > 0.0 &&
       !observe_only_ && calibration_valid_)
     {
-      Setpoint takeoff;
-      takeoff.position = {msg->x, msg->y, msg->z - startup_takeoff_altitude_m_};
-      takeoff.yaw = px4_heading_;
-      latest_setpoint_ = takeoff;
+      takeoff_origin_ = {msg->x, msg->y, msg->z};
+      takeoff_target_ = takeoff_origin_;
+      takeoff_target_[2] -= startup_takeoff_altitude_m_;
+      Setpoint hold;
+      hold.position = takeoff_origin_;
+      hold.yaw = px4_heading_;
+      latest_setpoint_ = hold;
       first_command_time_ = std::chrono::steady_clock::now();
       startup_takeoff_initialized_ = true;
-      publish_status("startup_takeoff_setpoint_initialized:altitude_m=" +
-        std::to_string(startup_takeoff_altitude_m_));
+      publish_status("startup_takeoff_hold_initialized_waiting_for_offboard_and_arm");
     }
-    if (startup_takeoff_initialized_ && !startup_takeoff_complete_ && latest_setpoint_ &&
-      std::abs(msg->z - latest_setpoint_->position[2]) <= startup_takeoff_tolerance_m_)
-    {
-      startup_takeoff_complete_ = true;
-      publish_status("startup_takeoff_reached_target_waiting_for_planner_goal");
+    if (startup_takeoff_initialized_ && !startup_takeoff_complete_ && latest_setpoint_) {
+      const double horizontal_speed = std::hypot(msg->vx, msg->vy);
+      const double takeoff_elapsed = startup_takeoff_start_time_ ?
+        (now() - *startup_takeoff_start_time_).seconds() : -1.0;
+      const bool profile_finished = takeoff_elapsed >= startup_takeoff_duration_sec_;
+      const bool at_altitude = std::abs(msg->z - takeoff_target_[2]) <=
+        startup_takeoff_tolerance_m_;
+      const bool settled = msg->v_xy_valid && msg->v_z_valid &&
+        std::isfinite(horizontal_speed) && std::isfinite(msg->vz) &&
+        horizontal_speed <= startup_takeoff_velocity_tolerance_mps_ &&
+        std::abs(msg->vz) <= startup_takeoff_velocity_tolerance_mps_;
+      startup_takeoff_stable_samples_ = profile_finished && at_altitude && settled ?
+        startup_takeoff_stable_samples_ + 1 : 0;
+      if (startup_takeoff_stable_samples_ >= startup_takeoff_required_samples_) {
+        startup_takeoff_complete_ = true;
+        publish_status("startup_takeoff_reached_target_waiting_for_planner_goal");
+      }
     }
     const std::array<uint8_t, 3> counters{
       msg->xy_reset_counter, msg->z_reset_counter, msg->heading_reset_counter};
@@ -406,6 +431,7 @@ private:
       publish_status("waiting_for_valid_px4_local_position");
       return;
     }
+    update_startup_takeoff_setpoint();
     if (reset_blocked_ && !first_command_time_) {
       return;
     }
@@ -493,10 +519,38 @@ private:
       return;
     }
     if (vehicle_status_->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED) {
+      if (startup_takeoff_initialized_ && !startup_takeoff_start_time_) {
+        startup_takeoff_start_time_ = now();
+        publish_status("startup_takeoff_profile_started");
+      }
       publish_status("offboard_active_vehicle_armed_tracking_latest_planner_setpoint");
     } else {
       publish_status("offboard_active_vehicle_disarmed_tracking_latest_planner_setpoint");
     }
+  }
+
+  void update_startup_takeoff_setpoint()
+  {
+    if (!startup_takeoff_initialized_ || startup_takeoff_complete_ || !startup_takeoff_start_time_) {
+      return;
+    }
+
+    const double elapsed = std::max(0.0, (now() - *startup_takeoff_start_time_).seconds());
+    const double u = std::clamp(elapsed / startup_takeoff_duration_sec_, 0.0, 1.0);
+    const double u2 = u * u;
+    const double u3 = u2 * u;
+    const double u4 = u3 * u;
+    const double u5 = u4 * u;
+    const double blend = 10.0 * u3 - 15.0 * u4 + 6.0 * u5;
+    const double blend_rate = (30.0 * u2 - 60.0 * u3 + 30.0 * u4) /
+      startup_takeoff_duration_sec_;
+    const double blend_accel = (60.0 * u - 180.0 * u2 + 120.0 * u3) /
+      (startup_takeoff_duration_sec_ * startup_takeoff_duration_sec_);
+    const double delta_z = takeoff_target_[2] - takeoff_origin_[2];
+    latest_setpoint_->position = takeoff_origin_;
+    latest_setpoint_->position[2] = takeoff_origin_[2] + delta_z * blend;
+    latest_setpoint_->velocity = {0.0, 0.0, delta_z * blend_rate};
+    latest_setpoint_->acceleration = {0.0, 0.0, delta_z * blend_accel};
   }
 
   bool command_retry_due(const std::chrono::steady_clock::time_point now) const
@@ -554,12 +608,18 @@ private:
   double max_yaw_rate_rps_{3.0};
   double startup_takeoff_altitude_m_{0.0};
   double startup_takeoff_tolerance_m_{0.08};
+  double startup_takeoff_duration_sec_{2.5};
+  double startup_takeoff_velocity_tolerance_mps_{0.12};
+  int startup_takeoff_required_samples_{10};
+  int startup_takeoff_stable_samples_{0};
   double px4_heading_{0.0};
   bool startup_takeoff_initialized_{false};
   bool startup_takeoff_complete_{false};
   bool takeoff_rejection_reported_{false};
   Vector3 translation_{};
   Matrix3 rotation_{};
+  Vector3 takeoff_origin_{};
+  Vector3 takeoff_target_{};
   std::optional<Vector3> local_position_;
   std::optional<Setpoint> latest_setpoint_;
   std::optional<double> manual_yaw_;
@@ -567,6 +627,7 @@ private:
   std::optional<std::chrono::steady_clock::time_point> first_command_time_;
   std::optional<std::chrono::steady_clock::time_point> last_vehicle_command_time_;
   std::optional<std::chrono::steady_clock::time_point> last_planner_status_time_;
+  std::optional<rclcpp::Time> startup_takeoff_start_time_;
   std::optional<px4_msgs::msg::VehicleStatus> vehicle_status_;
   uint64_t px4_timestamp_{0};
   rclcpp::Subscription<PositionCommand>::SharedPtr command_sub_;
