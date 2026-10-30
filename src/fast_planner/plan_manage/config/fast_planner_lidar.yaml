@@ -6,6 +6,8 @@
     fsm/tracking_error_replan: 0.4
     fsm/tracking_error_emergency: 1.5
     fsm/odom_timeout_sec: 0.5
+    fsm/odom_max_speed_mps: 5.0
+    fsm/odom_position_jump_slack_m: 0.35
     # Match EGO's measured-goal completion tolerance. The planner must use
     # live odometry to decide completion; a trajectory endpoint is not proof
     # that PX4 reached the target.
@@ -36,6 +38,9 @@
     sdf_map/local_bound_inflate: 0.0
     sdf_map/local_map_margin: 5
     sdf_map/ground_height: -0.01
+    # Keep the vehicle center at least 0.15 m above the ground even when the
+    # lidar scan does not return enough floor points to build an occupied layer.
+    sdf_map/virtual_floor_height: 0.15
     sdf_map/esdf_slice_height: 0.3
     sdf_map/visualization_truncate_height: 1.8
     sdf_map/virtual_ceil_height: 2.9

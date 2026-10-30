@@ -203,6 +203,14 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
     return false;
   }
 
+  const double goal_clearance = edt_environment_->evaluateCoarseEDT(end_pt, -1.0);
+  if (!std::isfinite(goal_clearance) || goal_clearance <= 0.3) {
+    RCLCPP_WARN(rclcpp::get_logger("FastPlannerManager"),
+                "Rejecting plan before search: goal clearance %.3f m is below 0.300 m",
+                goal_clearance);
+    return false;
+  }
+
   auto t1 = clock_->now();
   double t_search = 0.0, t_opt = 0.0, t_adjust = 0.0;
 

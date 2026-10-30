@@ -107,6 +107,7 @@ struct MappingParameters {
 
   /* visualization and computation time display */
   double esdf_slice_height_, visualization_truncate_height_, virtual_ceil_height_, ground_height_;
+  double virtual_floor_height_;
   bool show_esdf_time_, show_occ_time_;
 
   /* active mapping */

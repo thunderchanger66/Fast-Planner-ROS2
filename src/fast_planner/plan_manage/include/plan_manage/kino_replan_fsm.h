@@ -72,7 +72,10 @@ private:
   double tracking_error_replan_{0.45};
   double tracking_error_emergency_{0.9};
   double odom_timeout_sec_{0.5};
+  double odom_max_speed_mps_{5.0};
+  double odom_position_jump_slack_m_{0.35};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_odom_stamp_{0, 0, RCL_ROS_TIME};
   bool odometryFresh() const;
   std::string planning_frame_;
   rclcpp::Time next_plan_attempt_{0, 0, RCL_ROS_TIME};
@@ -83,6 +86,7 @@ private:
   FSM_EXEC_STATE exec_state_;
 
   Eigen::Vector3d odom_pos_, odom_vel_;  // odometry state
+  Eigen::Vector3d last_odom_pos_;
   Eigen::Quaterniond odom_orient_;
 
   Eigen::Vector3d start_pt_, start_vel_, start_acc_, start_yaw_;  // start state

@@ -48,6 +48,7 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->declare_parameter<float>("sdf_map/local_bound_inflate", 0.5);
   node->declare_parameter<int>("sdf_map/local_map_margin", 5);
   node->declare_parameter<float>("sdf_map/ground_height", 0.5);
+  node->declare_parameter<float>("sdf_map/virtual_floor_height", 0.15);
   node->declare_parameter<float>("sdf_map/cx", 0.5);
   node->declare_parameter<float>("sdf_map/cy", 0.5);
   node->declare_parameter<float>("sdf_map/fx", 0.5);
@@ -131,6 +132,14 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/local_bound_inflate", mp_.local_bound_inflate_, 1.0);
   node->get_parameter_or("sdf_map/local_map_margin", mp_.local_map_margin_, 1);
   node->get_parameter_or("sdf_map/ground_height", mp_.ground_height_, 1.0);
+  node->get_parameter_or("sdf_map/virtual_floor_height", mp_.virtual_floor_height_, 0.15);
+  if (!std::isfinite(mp_.virtual_floor_height_) ||
+      mp_.virtual_floor_height_ <= mp_.ground_height_ ||
+      mp_.virtual_floor_height_ >= mp_.ground_height_ + z_size) {
+    RCLCPP_WARN(node->get_logger(),
+                "Invalid virtual floor height; using 0.15 m above the map ground");
+    mp_.virtual_floor_height_ = mp_.ground_height_ + 0.15;
+  }
 
   if (mp_.skip_pixel_ < 1) {
     RCLCPP_WARN(node->get_logger(),
@@ -828,6 +837,13 @@ void SDFMap::clearAndInflateLocalMap() {
         md_.occupancy_buffer_inflate_[toAddress(x, y, ceil_id)] = 1;
       }
   }
+
+  const int floor_id = static_cast<int>(std::floor(
+      (mp_.virtual_floor_height_ - mp_.map_origin_.z()) * mp_.resolution_inv_));
+  for (int x = md_.local_bound_min_.x(); x <= md_.local_bound_max_.x(); ++x)
+    for (int y = md_.local_bound_min_.y(); y <= md_.local_bound_max_.y(); ++y)
+      for (int z = md_.local_bound_min_.z(); z <= std::min(floor_id, md_.local_bound_max_.z()); ++z)
+        md_.occupancy_buffer_inflate_[toAddress(x, y, z)] = 1;
 }
 
 void SDFMap::visCallback() {
@@ -1033,6 +1049,13 @@ void SDFMap::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
       for (int y = min_idx.y(); y <= max_idx.y(); ++y)
         md_.occupancy_buffer_inflate_[toAddress(x, y, ceil_z)] = 1;
   }
+
+  const int floor_z = static_cast<int>(std::floor(
+      (mp_.virtual_floor_height_ - mp_.map_origin_.z()) * mp_.resolution_inv_));
+  for (int x = min_idx.x(); x <= max_idx.x(); ++x)
+    for (int y = min_idx.y(); y <= max_idx.y(); ++y)
+      for (int z = min_idx.z(); z <= std::min(floor_z, max_idx.z()); ++z)
+        md_.occupancy_buffer_inflate_[toAddress(x, y, z)] = 1;
 
   // Recompute a consistent ESDF covering the full active search window,
   // including the safety inflation ring, after the cloud callback.

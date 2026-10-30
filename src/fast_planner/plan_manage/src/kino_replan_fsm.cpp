@@ -27,6 +27,8 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->declare_parameter("fsm/tracking_error_replan", 0.45);
   nh->declare_parameter("fsm/tracking_error_emergency", 0.9);
   nh->declare_parameter("fsm/odom_timeout_sec", 0.5);
+  nh->declare_parameter("fsm/odom_max_speed_mps", 5.0);
+  nh->declare_parameter("fsm/odom_position_jump_slack_m", 0.35);
   nh->declare_parameter("fsm/waypoint_num", -1);
   // /goal_pose is the bridge/manual_goal contract.  Launch files can still
   // override this for a visualization or multi-UAV namespace.
@@ -41,6 +43,12 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
   nh->get_parameter("fsm/odom_timeout_sec", odom_timeout_sec_);
   if (!std::isfinite(odom_timeout_sec_) || odom_timeout_sec_ <= 0.0)
     odom_timeout_sec_ = 0.5;
+  nh->get_parameter("fsm/odom_max_speed_mps", odom_max_speed_mps_);
+  nh->get_parameter("fsm/odom_position_jump_slack_m", odom_position_jump_slack_m_);
+  if (!std::isfinite(odom_max_speed_mps_) || odom_max_speed_mps_ <= 0.0)
+    odom_max_speed_mps_ = 5.0;
+  if (!std::isfinite(odom_position_jump_slack_m_) || odom_position_jump_slack_m_ < 0.0)
+    odom_position_jump_slack_m_ = 0.35;
   if (!std::isfinite(tracking_error_replan_) || tracking_error_replan_ <= 0.0 ||
       !std::isfinite(tracking_error_emergency_) ||
       tracking_error_emergency_ <= tracking_error_replan_) {
@@ -170,6 +178,40 @@ void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
   }
 
   orientation.normalize();
+  const double speed = child_velocity.norm();
+  const rclcpp::Time stamp(msg->header.stamp, node_->get_clock()->get_clock_type());
+  const double stamp_age = (node_->now() - stamp).seconds();
+  if (stamp.nanoseconds() <= 0 || !std::isfinite(stamp_age) || stamp_age < -0.05 ||
+      stamp_age > odom_timeout_sec_ || !std::isfinite(speed) || speed > odom_max_speed_mps_) {
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                          "Rejecting stale/invalid odometry: age %.3f s, speed %.2f m/s",
+                          stamp_age, speed);
+    if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ) {
+      emergencyStop("invalid odometry speed or timestamp");
+      changeFSMExecState(GEN_NEW_TRAJ, "ODOM_INVALID");
+    }
+    return;
+  }
+  if (have_odom_) {
+    const double dt = (stamp - last_odom_stamp_).seconds();
+    if (!std::isfinite(dt) || dt <= 0.0) {
+      RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                            "Rejecting odometry with repeated or out-of-order timestamp");
+      return;
+    }
+    const double allowed_step = odom_position_jump_slack_m_ + odom_max_speed_mps_ * dt;
+    const double position_step = (position - last_odom_pos_).norm();
+    if (!std::isfinite(position_step) || position_step > allowed_step) {
+      RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                            "Rejecting odometry jump %.2f m over %.3f s (limit %.2f m)",
+                            position_step, dt, allowed_step);
+      if (exec_state_ == EXEC_TRAJ || exec_state_ == REPLAN_TRAJ) {
+        emergencyStop("odometry position discontinuity");
+        changeFSMExecState(GEN_NEW_TRAJ, "ODOM_JUMP");
+      }
+      return;
+    }
+  }
   odom_pos_ = position;
   odom_orient_ = orientation;
   // FAST-LIO publishes Odometry twist in child_frame_id (body), while the
@@ -177,6 +219,8 @@ void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
   odom_vel_ = odom_orient_ * child_velocity;
 
   last_odom_time_ = node_->now();
+  last_odom_stamp_ = stamp;
+  last_odom_pos_ = position;
   have_odom_ = true;
 }
 
@@ -237,6 +281,19 @@ void KinoReplanFSM::execFSMCallback() {
 
     case GEN_NEW_TRAJ:{
       if (node_->now() < next_plan_attempt_) return;
+      if (have_target_ && planner_manager_->edt_environment_->sdf_map_->hasReadyMap()) {
+        const double goal_clearance =
+            planner_manager_->edt_environment_->evaluateCoarseEDT(end_pt_, -1.0);
+        if (!std::isfinite(goal_clearance) || goal_clearance <= 0.3) {
+          RCLCPP_ERROR(node_->get_logger(),
+                       "Rejecting goal before planning: obstacle clearance %.3f m is below 0.300 m",
+                       goal_clearance);
+          emergencyStop("goal is inside obstacle clearance");
+          have_target_ = false;
+          changeFSMExecState(WAIT_TARGET, "GOAL_IN_COLLISION");
+          return;
+        }
+      }
       if ((odom_pos_ - end_pt_).norm() < no_replan_thresh_) {
         have_target_ = false;
         changeFSMExecState(WAIT_TARGET, "GOAL_REACHED");
