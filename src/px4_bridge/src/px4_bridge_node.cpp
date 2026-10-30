@@ -600,8 +600,8 @@ private:
   double max_command_age_sec_{0.5};
   double planner_watchdog_timeout_sec_{0.5};
   bool bridge_emergency_hold_{false};
-  std::optional<int> held_trajectory_id_;
-  std::optional<int> last_trajectory_id_;
+  std::optional<uint32_t> held_trajectory_id_;
+  std::optional<uint32_t> last_trajectory_id_;
   std::optional<std::chrono::steady_clock::time_point> latest_command_time_;
   double max_abs_position_m_{10.0};
   double max_velocity_mps_{5.0};

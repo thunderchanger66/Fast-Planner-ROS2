@@ -29,7 +29,7 @@ def parse_args():
         "--clear-manual-yaw-topic", default="/px4_bridge/clear_manual_yaw")
     parser.add_argument("--status-topic", default="/px4_bridge/status")
     parser.add_argument(
-        "--wait-timeout", type=float, default=30.0,
+        "--wait-timeout", type=float, default=60.0,
         help="seconds to wait for subscribers, yaw acknowledgement, and startup takeoff")
     args = parser.parse_args()
     if args.auto_yaw and args.yaw_deg is not None:
@@ -104,8 +104,10 @@ def main():
                 break
             rclpy.spin_once(node, timeout_sec=0.1)
         else:
+            recent = "; ".join(dict.fromkeys(bridge_status[-20:]))
             raise RuntimeError(
-                "bridge did not report a completed startup takeoff; do not send a goal yet")
+                "bridge did not report a completed startup takeoff; do not send a goal yet. "
+                f"Recent bridge states: {recent or 'none received'}")
 
         goal = PoseStamped()
         goal.header.stamp = node.get_clock().now().to_msg()
