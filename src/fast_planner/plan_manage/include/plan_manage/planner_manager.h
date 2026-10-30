@@ -43,6 +43,7 @@ public:
   bool checkTrajCollision(double& distance);
   bool checkTrajCollision(NonUniformBspline trajectory, double& distance,
                           double max_check_distance = 6.0);
+  bool isInMap(const Eigen::Vector3d& position);
 
   PlanParameters pp_;
   LocalTrajData local_data_;

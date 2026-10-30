@@ -27,6 +27,8 @@
 #include "rcutils/logging_macros.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 
 #define current_img_ md_.depth_image_[image_cnt_ & 1]
 #define last_img_ md_.depth_image_[!(image_cnt_ & 1)]
@@ -82,12 +84,24 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/map_size_x", x_size, -1.0);
   node->get_parameter_or("sdf_map/map_size_y", y_size, -1.0);
   node->get_parameter_or("sdf_map/map_size_z", z_size, -1.0);
+  if (!std::isfinite(mp_.resolution_) || mp_.resolution_ <= 0.0 ||
+      !std::isfinite(x_size) || !std::isfinite(y_size) || !std::isfinite(z_size) ||
+      x_size <= 0.0 || y_size <= 0.0 || z_size <= 0.0) {
+    RCLCPP_FATAL(node->get_logger(), "sdf_map resolution and map sizes must be finite and positive");
+    throw std::invalid_argument("invalid Fast-Planner map geometry");
+  }
   node->get_parameter_or("sdf_map/local_update_range_x", mp_.local_update_range_(0), -1.0);
   node->get_parameter_or("sdf_map/local_update_range_y", mp_.local_update_range_(1), -1.0);
   node->get_parameter_or("sdf_map/local_update_range_z", mp_.local_update_range_(2), -1.0);
   node->get_parameter_or("sdf_map/obstacles_inflation", mp_.obstacles_inflation_, -1.0);
   node->get_parameter_or("sdf_map/point_cloud_timeout", mp_.point_cloud_timeout_, 0.5);
   node->get_parameter_or("sdf_map/cloud_voxel_retention_sec", mp_.cloud_voxel_retention_sec_, 4.0);
+  if (!mp_.local_update_range_.allFinite() || (mp_.local_update_range_.array() <= 0.0).any() ||
+      !std::isfinite(mp_.obstacles_inflation_) || mp_.obstacles_inflation_ < 0.0) {
+    RCLCPP_FATAL(node->get_logger(),
+                 "sdf_map local update ranges must be positive and obstacle inflation nonnegative");
+    throw std::invalid_argument("invalid Fast-Planner map update geometry");
+  }
   if (!std::isfinite(mp_.cloud_voxel_retention_sec_) ||
       mp_.cloud_voxel_retention_sec_ < 0.5 || mp_.cloud_voxel_retention_sec_ > 60.0) {
     RCLCPP_WARN(node->get_logger(), "Invalid cloud voxel retention; using 4.0 s");
@@ -117,8 +131,21 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/p_min", mp_.p_min_, 0.12);
   node->get_parameter_or("sdf_map/p_max", mp_.p_max_, 0.97);
   node->get_parameter_or("sdf_map/p_occ", mp_.p_occ_, 0.80);
+  if (!std::isfinite(mp_.p_hit_) || mp_.p_hit_ <= 0.0 || mp_.p_hit_ >= 1.0 ||
+      !std::isfinite(mp_.p_miss_) || mp_.p_miss_ <= 0.0 || mp_.p_miss_ >= 1.0 ||
+      !std::isfinite(mp_.p_min_) || !std::isfinite(mp_.p_max_) || !std::isfinite(mp_.p_occ_) ||
+      mp_.p_min_ <= 0.0 || mp_.p_min_ >= mp_.p_occ_ || mp_.p_occ_ >= mp_.p_max_ || mp_.p_max_ >= 1.0) {
+    RCLCPP_FATAL(node->get_logger(),
+                 "sdf_map probabilities must satisfy 0 < p_min < p_occ < p_max < 1");
+    throw std::invalid_argument("invalid Fast-Planner occupancy probabilities");
+  }
   node->get_parameter_or("sdf_map/min_ray_length", mp_.min_ray_length_, -0.1);
   node->get_parameter_or("sdf_map/max_ray_length", mp_.max_ray_length_, -0.1);
+  if (!std::isfinite(mp_.min_ray_length_) || !std::isfinite(mp_.max_ray_length_) ||
+      mp_.min_ray_length_ < 0.0 || mp_.max_ray_length_ <= mp_.min_ray_length_) {
+    RCLCPP_FATAL(node->get_logger(), "sdf_map ray lengths must satisfy 0 <= min < max");
+    throw std::invalid_argument("invalid Fast-Planner ray lengths");
+  }
 
   node->get_parameter_or("sdf_map/esdf_slice_height", mp_.esdf_slice_height_, -0.1);
   node->get_parameter_or("sdf_map/visualization_truncate_height", mp_.visualization_truncate_height_, -0.1);
@@ -132,6 +159,10 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
   node->get_parameter_or("sdf_map/local_bound_inflate", mp_.local_bound_inflate_, 1.0);
   node->get_parameter_or("sdf_map/local_map_margin", mp_.local_map_margin_, 1);
   node->get_parameter_or("sdf_map/ground_height", mp_.ground_height_, 1.0);
+  if (!std::isfinite(mp_.ground_height_)) {
+    RCLCPP_FATAL(node->get_logger(), "sdf_map/ground_height must be finite");
+    throw std::invalid_argument("invalid Fast-Planner ground height");
+  }
   node->get_parameter_or("sdf_map/virtual_floor_height", mp_.virtual_floor_height_, 0.15);
   if (!std::isfinite(mp_.virtual_floor_height_) ||
       mp_.virtual_floor_height_ <= mp_.ground_height_ ||
@@ -147,66 +178,39 @@ void SDFMap::initMap(std::shared_ptr<FastPlanner> node) {
                 mp_.skip_pixel_);
     mp_.skip_pixel_ = 1;
   }
+  if (mp_.depth_filter_margin_ < 0) mp_.depth_filter_margin_ = 0;
 
-  // Initialize other parameters
-    mp_.local_bound_inflate_ = std::max(mp_.resolution_, mp_.local_bound_inflate_);
-    mp_.resolution_inv_ = 1 / mp_.resolution_;
-    mp_.map_origin_ = Eigen::Vector3d(-x_size / 2.0, -y_size / 2.0, mp_.ground_height_);
-    mp_.map_size_ = Eigen::Vector3d(x_size, y_size, z_size);
+  mp_.local_bound_inflate_ = std::max(mp_.resolution_, mp_.local_bound_inflate_);
+  mp_.resolution_inv_ = 1.0 / mp_.resolution_;
+  mp_.map_origin_ = Eigen::Vector3d(-x_size / 2.0, -y_size / 2.0, mp_.ground_height_);
+  mp_.map_size_ = Eigen::Vector3d(x_size, y_size, z_size);
+  mp_.prob_hit_log_ = logit(mp_.p_hit_);
+  mp_.prob_miss_log_ = logit(mp_.p_miss_);
+  mp_.clamp_min_log_ = logit(mp_.p_min_);
+  mp_.clamp_max_log_ = logit(mp_.p_max_);
+  mp_.min_occupancy_log_ = logit(mp_.p_occ_);
+  mp_.unknown_flag_ = 0.01;
 
-    mp_.prob_hit_log_ = logit(mp_.p_hit_);
-    mp_.prob_miss_log_ = logit(mp_.p_miss_);
-    mp_.clamp_min_log_ = logit(mp_.p_min_);
-    mp_.clamp_max_log_ = logit(mp_.p_max_);
-    mp_.min_occupancy_log_ = logit(mp_.p_occ_);
-    mp_.unknown_flag_ = 0.01;
-
-    cout << "hit: " << mp_.prob_hit_log_ << endl;
-    cout << "miss: " << mp_.prob_miss_log_ << endl;
-    cout << "min log: " << mp_.clamp_min_log_ << endl;
-    cout << "max: " << mp_.clamp_max_log_ << endl;
-    cout << "thresh log: " << mp_.min_occupancy_log_ << endl;
-
-    for (int i = 0; i < 3; ++i) mp_.map_voxel_num_(i) = ceil(mp_.map_size_(i) / mp_.resolution_);
-
-    mp_.map_min_boundary_ = mp_.map_origin_;
-    mp_.map_max_boundary_ = mp_.map_origin_ + mp_.map_size_;
-
-    mp_.map_min_idx_ = Eigen::Vector3i::Zero();
-    mp_.map_max_idx_ = mp_.map_voxel_num_ - Eigen::Vector3i::Ones();
-
-
-
-    // Initialize buffers
-    mp_.local_bound_inflate_ = max(mp_.resolution_, mp_.local_bound_inflate_);
-    mp_.resolution_inv_ = 1 / mp_.resolution_;
-    mp_.map_origin_ = Eigen::Vector3d(-x_size / 2.0, -y_size / 2.0, mp_.ground_height_);
-    mp_.map_size_ = Eigen::Vector3d(x_size, y_size, z_size);
-
-    mp_.prob_hit_log_ = logit(mp_.p_hit_);
-    mp_.prob_miss_log_ = logit(mp_.p_miss_);
-    mp_.clamp_min_log_ = logit(mp_.p_min_);
-    mp_.clamp_max_log_ = logit(mp_.p_max_);
-    mp_.min_occupancy_log_ = logit(mp_.p_occ_);
-    mp_.unknown_flag_ = 0.01;
-
-    cout << "hit: " << mp_.prob_hit_log_ << endl;
-    cout << "miss: " << mp_.prob_miss_log_ << endl;
-    cout << "min log: " << mp_.clamp_min_log_ << endl;
-    cout << "max: " << mp_.clamp_max_log_ << endl;
-    cout << "thresh log: " << mp_.min_occupancy_log_ << endl;
-
-    for (int i = 0; i < 3; ++i) mp_.map_voxel_num_(i) = ceil(mp_.map_size_(i) / mp_.resolution_);
-
-    mp_.map_min_boundary_ = mp_.map_origin_;
-    mp_.map_max_boundary_ = mp_.map_origin_ + mp_.map_size_;
-
-    mp_.map_min_idx_ = Eigen::Vector3i::Zero();
-    mp_.map_max_idx_ = mp_.map_voxel_num_ - Eigen::Vector3i::Ones();
+  size_t voxel_count = 1;
+  for (int i = 0; i < 3; ++i) {
+    const double voxel_dim = std::ceil(mp_.map_size_(i) / mp_.resolution_);
+    if (!std::isfinite(voxel_dim) || voxel_dim < 1.0 ||
+        voxel_dim > static_cast<double>(std::numeric_limits<int>::max()))
+      throw std::invalid_argument("Fast-Planner map voxel dimension is out of range");
+    mp_.map_voxel_num_(i) = static_cast<int>(voxel_dim);
+    if (voxel_count > static_cast<size_t>(std::numeric_limits<int>::max()) /
+                          static_cast<size_t>(mp_.map_voxel_num_(i)))
+      throw std::invalid_argument("Fast-Planner map voxel count exceeds supported buffer size");
+    voxel_count *= static_cast<size_t>(mp_.map_voxel_num_(i));
+  }
+  mp_.map_min_boundary_ = mp_.map_origin_;
+  mp_.map_max_boundary_ = mp_.map_origin_ + mp_.map_size_;
+  mp_.map_min_idx_ = Eigen::Vector3i::Zero();
+  mp_.map_max_idx_ = mp_.map_voxel_num_ - Eigen::Vector3i::Ones();
 
     // initialize data buffers
 
-    int buffer_size = mp_.map_voxel_num_(0) * mp_.map_voxel_num_(1) * mp_.map_voxel_num_(2);
+    const int buffer_size = static_cast<int>(voxel_count);
 
     md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_ - mp_.unknown_flag_);
     md_.occupancy_buffer_neg = vector<char>(buffer_size, 0);
@@ -490,6 +494,13 @@ void SDFMap::projectDepthImage() {
   int cols = md_.depth_image_.cols;
   int rows = md_.depth_image_.rows;
 
+  if (rows <= 0 || cols <= 0 || md_.depth_image_.type() != CV_16UC1 ||
+      !std::isfinite(mp_.fx_) || mp_.fx_ <= 0.0 || !std::isfinite(mp_.fy_) || mp_.fy_ <= 0.0 ||
+      !std::isfinite(mp_.k_depth_scaling_factor_) || mp_.k_depth_scaling_factor_ <= 0.0)
+    return;
+  const size_t max_points = static_cast<size_t>(rows) * static_cast<size_t>(cols);
+  if (md_.proj_points_.size() < max_points) md_.proj_points_.resize(max_points);
+
   double depth;
 
   Eigen::Matrix3d camera_r = md_.camera_q_.toRotationMatrix();
@@ -507,7 +518,8 @@ void SDFMap::projectDepthImage() {
 
         proj_pt = camera_r * proj_pt + md_.camera_pos_;
 
-        md_.proj_points_[md_.proj_points_cnt++] = proj_pt;
+        if (md_.proj_points_cnt < static_cast<int>(md_.proj_points_.size()))
+          md_.proj_points_[md_.proj_points_cnt++] = proj_pt;
       }
     }
   } else {
@@ -524,10 +536,11 @@ void SDFMap::projectDepthImage() {
         row_ptr = md_.depth_image_.ptr<uint16_t>(v) + mp_.depth_filter_margin_;
 
         for (int u = mp_.depth_filter_margin_; u < cols - mp_.depth_filter_margin_; u += mp_.skip_pixel_) {
-          depth = (*row_ptr) * inv_factor;
+          const uint16_t raw_depth = *row_ptr;
           row_ptr = row_ptr + mp_.skip_pixel_;
+          depth = raw_depth * inv_factor;
 
-          if (*row_ptr == 0) {
+          if (raw_depth == 0) {
             depth = mp_.max_ray_length_ + 0.1;
           } else if (depth < mp_.depth_filter_mindist_) {
             continue;
@@ -541,7 +554,8 @@ void SDFMap::projectDepthImage() {
 
           pt_world = camera_r * pt_cur + md_.camera_pos_;
 
-          md_.proj_points_[md_.proj_points_cnt++] = pt_world;
+          if (md_.proj_points_cnt < static_cast<int>(md_.proj_points_.size()))
+            md_.proj_points_[md_.proj_points_cnt++] = pt_world;
         }
       }
     }
@@ -905,6 +919,12 @@ void SDFMap::updateESDFCallback() {
 
 void SDFMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr img,
                                const geometry_msgs::msg::PoseStamped::ConstSharedPtr pose) {
+    if (img->encoding != sensor_msgs::image_encodings::TYPE_32FC1 &&
+        img->encoding != sensor_msgs::image_encodings::TYPE_16UC1) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                           "Ignoring unsupported depth encoding '%s'", img->encoding.c_str());
+      return;
+    }
     /* get depth image */
     cv_bridge::CvImagePtr cv_ptr;
     cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
@@ -1376,6 +1396,12 @@ void SDFMap::getSurroundPts(const Eigen::Vector3d& pos, Eigen::Vector3d pts[2][2
 
 void SDFMap::depthOdomCallback(const sensor_msgs::msg::Image::ConstSharedPtr img,
                                const nav_msgs::msg::Odometry::ConstSharedPtr odom) {
+  if (img->encoding != sensor_msgs::image_encodings::TYPE_32FC1 &&
+      img->encoding != sensor_msgs::image_encodings::TYPE_16UC1) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                         "Ignoring unsupported depth encoding '%s'", img->encoding.c_str());
+    return;
+  }
   /* Get pose */
   md_.camera_pos_(0) = odom->pose.pose.position.x;
   md_.camera_pos_(1) = odom->pose.pose.position.y;

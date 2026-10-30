@@ -21,6 +21,10 @@ FastPlannerManager::~FastPlannerManager() {
   std::cout << "des manager" << std::endl;
 }
 
+bool FastPlannerManager::isInMap(const Eigen::Vector3d& position) {
+  return sdf_map_ && position.allFinite() && sdf_map_->isInMap(position);
+}
+
 void FastPlannerManager::initPlanModules(std::shared_ptr<FastPlanner> nh) {
   clock_ = nh->get_clock();
   /* read algorithm parameters */
@@ -188,6 +192,12 @@ bool FastPlannerManager::kinodynamicReplan( Eigen::Vector3d start_pt, Eigen::Vec
   std::cout << "start: " << start_pt.transpose() << ", " << start_vel.transpose() << ", "
             << start_acc.transpose() << "\ngoal:" << end_pt.transpose() << ", " << end_vel.transpose()
             << std::endl;
+
+  if (!isInMap(start_pt) || !isInMap(end_pt)) {
+    RCLCPP_WARN(rclcpp::get_logger("FastPlannerManager"),
+                "Rejecting plan before search: start or goal is outside the configured SDF map bounds");
+    return false;
+  }
 
   // Goal completion is decided by the FSM from measured odometry. This
   // routine must not turn a still-unreached goal into a planning failure merely

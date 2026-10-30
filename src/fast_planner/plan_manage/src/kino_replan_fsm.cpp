@@ -2,6 +2,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <cmath>
+#include <stdexcept>
 
 namespace fast_planner {
 
@@ -62,6 +63,13 @@ void KinoReplanFSM::init(std::shared_ptr<FastPlanner> nh) {
     replan_retry_interval_ = 0.25;
   }
   nh->get_parameter("fsm/waypoint_num", waypoint_num_);
+  if ((target_type_ != TARGET_TYPE::MANUAL_TARGET && target_type_ != TARGET_TYPE::PRESET_TARGET) ||
+      waypoint_num_ < 0 || waypoint_num_ > 3 ||
+      (target_type_ == TARGET_TYPE::PRESET_TARGET && waypoint_num_ == 0)) {
+    RCLCPP_FATAL(nh->get_logger(),
+                 "Invalid FSM configuration: flight_type must be manual/preset and waypoint_num must fit [0, 3]");
+    throw std::invalid_argument("invalid Fast-Planner FSM configuration");
+  }
 
   //waypoints_.resize(waypoint_num_);
   nh->declare_parameter("fsm/waypoint0_x", -1.0);
@@ -124,6 +132,15 @@ void KinoReplanFSM::waypointCallback(const geometry_msgs::msg::PoseStamped::Shar
     return;
   }
 
+  const Eigen::Vector3d requested_goal(goal.x, goal.y, goal.z);
+  if (!planner_manager_->isInMap(requested_goal)) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Rejecting goal outside the configured SDF map bounds: %.2f %.2f %.2f",
+                 goal.x, goal.y, goal.z);
+    emergencyStop("goal outside map bounds");
+    return;
+  }
+
   if (msg->pose.position.z < -0.1) {
     return;
   }
@@ -165,6 +182,11 @@ void KinoReplanFSM::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
 
   const Eigen::Vector3d position(
       msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+  if (!planner_manager_->isInMap(position)) {
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                          "Rejecting odometry outside the configured SDF map bounds");
+    return;
+  }
   const Eigen::Vector3d child_velocity(
       msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z);
   Eigen::Quaterniond orientation(
@@ -281,6 +303,14 @@ void KinoReplanFSM::execFSMCallback() {
 
     case GEN_NEW_TRAJ:{
       if (node_->now() < next_plan_attempt_) return;
+      if (!planner_manager_->isInMap(odom_pos_) || !planner_manager_->isInMap(end_pt_)) {
+        RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                              "Planning suspended: start or goal is outside the configured SDF map bounds");
+        emergencyStop("start or goal outside map bounds");
+        have_target_ = false;
+        changeFSMExecState(WAIT_TARGET, "MAP_BOUNDS");
+        return;
+      }
       if (have_target_ && planner_manager_->edt_environment_->sdf_map_->hasReadyMap()) {
         const double goal_clearance =
             planner_manager_->edt_environment_->evaluateCoarseEDT(end_pt_, -1.0);

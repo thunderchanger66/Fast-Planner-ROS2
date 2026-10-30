@@ -20,14 +20,16 @@ int main(int argc, char * argv[])
   // RCLCPP_INFO(node->get_logger(), "The planner value is (int) : %s",
   //               planner_param.value_to_string().c_str());
 
+  if (planner != 1) {
+      RCLCPP_FATAL(node->get_logger(),
+                   "Unsupported planner_node/planner=%d; this build supports planner 1 (kino)", planner);
+      rclcpp::shutdown();
+      return 2;
+  }
+
   // # Initialize the kino Class
   std::shared_ptr<KinoReplanFSM> kino_replan = std::make_shared<KinoReplanFSM>();
-  
-  if (planner == 1) {
-      kino_replan->init(node);
-  } else if (planner == 2) {
-      std::cout << ("TOPO Commented for now ");
-  }
+  kino_replan->init(node);
 
   rclcpp::spin(node);
   rclcpp::shutdown();

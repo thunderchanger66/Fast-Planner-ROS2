@@ -9,6 +9,7 @@
 #include "std_msgs/msg/string.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace std::chrono_literals;
 
@@ -156,6 +157,22 @@ private:
           RCLCPP_WARN(get_logger(), "Ignoring B-spline trajectory with non-finite knot or yaw");
           return;
       }
+      if (msg->traj_id < 0 || msg->traj_id > std::numeric_limits<int>::max()) {
+          RCLCPP_WARN(get_logger(), "Ignoring B-spline with out-of-range trajectory id");
+          return;
+      }
+      const size_t control_count = msg->pos_pts.size();
+      const double candidate_duration = msg->knots[control_count] - msg->knots[msg->order];
+      if (!std::isfinite(candidate_duration) || candidate_duration <= 0.0) {
+          RCLCPP_WARN(get_logger(), "Ignoring B-spline trajectory with invalid active knot span");
+          return;
+      }
+      for (size_t i = 0; i < control_count; ++i) {
+          if (msg->knots[i + msg->order + 1] <= msg->knots[i + 1]) {
+              RCLCPP_WARN(get_logger(), "Ignoring B-spline with degenerate derivative knot span");
+              return;
+          }
+      }
 
       Eigen::MatrixXd pos_pts(msg->pos_pts.size(), 3);
       Eigen::VectorXd knots(msg->knots.size());
@@ -191,12 +208,6 @@ private:
                       static_cast<long>(msg->traj_id));
           return;
       }
-      const double candidate_duration = candidate_traj[0].getTimeSum();
-      if (!std::isfinite(candidate_duration) || candidate_duration <= 0.0) {
-          RCLCPP_WARN(get_logger(), "Ignoring B-spline trajectory with invalid duration");
-          return;
-      }
-
       // Commit only after all trajectory data has passed validation, so a bad
       // update cannot interrupt the trajectory currently being executed.
       start_time_ = rclcpp::Time(msg->start_time, this->get_clock()->get_clock_type());
